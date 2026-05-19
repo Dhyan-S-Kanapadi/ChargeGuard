@@ -1,0 +1,128 @@
+from datetime import datetime
+from typing import Literal, NotRequired, Optional, TypedDict
+
+
+class MerchantProfile(TypedDict):
+    merchant_id: str
+    name: str
+    vertical: Literal["ecommerce", "food_delivery", "quick_commerce"]
+    razorpay_key: str
+    shiprocket_key: str
+    freshdesk_domain: str
+    average_order_value: float
+    chargeback_history_count: int
+
+
+class TransactionEvidence(TypedDict):
+    order_id: str
+    payment_id: str
+    amount: float
+    currency: str
+    otp_verified: bool
+    three_ds_authenticated: bool
+    device_id: str
+    ip_address: str
+    customer_email: str
+    order_history_count: int
+    previous_chargebacks: int
+    raw: dict
+
+
+class ShippingEvidence(TypedDict):
+    tracking_id: str
+    courier: str
+    status: str
+    delivered_at: Optional[datetime]
+    delivery_latitude: Optional[float]
+    delivery_longitude: Optional[float]
+    signature_obtained: bool
+    delivery_photo_url: Optional[str]
+    raw: dict
+
+
+class CommsEvidence(TypedDict):
+    emails: list[dict]
+    support_tickets: list[dict]
+    post_delivery_interaction: bool
+    complaint_raised_before_chargeback: bool
+    raw: dict
+
+
+class DeviceEvidence(TypedDict):
+    fraud_score: float
+    device_fingerprint: str
+    geolocation_match: bool
+    login_pattern_normal: bool
+    vpn_detected: bool
+    raw: dict
+
+
+class ConsortiumEvidence(TypedDict):
+    ethoca_match: bool
+    verifi_match: bool
+    cross_merchant_fraud_history: bool
+    dispute_count_across_merchants: int
+    raw: dict
+
+
+class DeliveryPhotoEvidence(TypedDict):
+    photo_url: str
+    ai_verified: bool
+    address_visible: bool
+    timestamp_on_photo: Optional[datetime]
+    raw: dict
+
+
+class OrderTimelineEvidence(TypedDict):
+    placed_at: datetime
+    accepted_at: Optional[datetime]
+    picked_at: Optional[datetime]
+    delivered_at: Optional[datetime]
+    post_delivery_rating: Optional[float]
+    raw: dict
+
+
+class ChargebackState(TypedDict):
+    # Input
+    chargeback_id: str
+    order_id: NotRequired[str]
+    payment_id: NotRequired[str]
+    tracking_id: NotRequired[str]
+    reason_code: str
+    card_network: Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"]
+    dispute_amount: float
+    currency: str
+    filing_deadline: datetime
+    merchant_profile: MerchantProfile
+
+    # Orchestration
+    investigation_plan: dict
+    requires_food_agents: bool
+
+    # Evidence
+    transaction: Optional[TransactionEvidence]
+    shipping: Optional[ShippingEvidence]
+    comms: Optional[CommsEvidence]
+    device: Optional[DeviceEvidence]
+    consortium: Optional[ConsortiumEvidence]
+    delivery_photo: Optional[DeliveryPhotoEvidence]
+    order_timeline: Optional[OrderTimelineEvidence]
+
+    # Intelligence
+    win_probability: Optional[float]
+    expected_value: Optional[float]
+    decision: Optional[Literal["FIGHT", "ACCEPT"]]
+    decision_reasoning: Optional[str]
+
+    # Response
+    rebuttal_document_path: Optional[str]
+    quality_approved: bool
+    quality_rejection_reason: Optional[str]
+    quality_loop_count: int
+    filing_confirmation: Optional[str]
+    filed_at: Optional[datetime]
+
+    # Learning
+    final_outcome: Optional[Literal["WIN", "LOSS", "PENDING"]]
+    outcome_reason: Optional[str]
+    outcome_recorded_at: Optional[datetime]

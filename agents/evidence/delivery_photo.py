@@ -1,0 +1,1 @@
+from core.graph import collect_food_evidence as delivery_photo_agent
