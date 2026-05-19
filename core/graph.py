@@ -3,64 +3,38 @@ from typing import Literal
 
 from langgraph.graph import END, StateGraph
 
+from agents.evidence.comms import comms_agent
+from agents.evidence.consortium import consortium_agent
+from agents.evidence.delivery_photo import delivery_photo_agent
+from agents.evidence.device import device_agent
+from agents.evidence.order_timeline import order_timeline_agent
+from agents.evidence.shipping import shipping_agent
+from agents.evidence.transaction import transaction_agent
+from agents.filing import filing_agent
+from agents.learning import learning_agent
+from agents.orchestrator import orchestrator_agent
+from agents.quality_check import quality_check_agent
+from agents.rebuttal_builder import rebuttal_builder_agent
+from agents.scoring import scoring_agent
 from core.state import ChargebackState
 
 
 logger = logging.getLogger(__name__)
 
 
-def _log_stub(name: str, state: ChargebackState) -> ChargebackState:
-    logger.info("Running %s stub", name)
+def accept_and_log(state: ChargebackState) -> ChargebackState:
+    logger.info("Accepting chargeback %s", state["chargeback_id"])
+    state["filing_confirmation"] = "accepted_no_filing"
     return state
 
 
-def orchestrator_agent(state: ChargebackState) -> ChargebackState:
-    return _log_stub("orchestrator", state)
-
-
-def collect_evidence_parallel(state: ChargebackState) -> ChargebackState:
-    logger.info("Running collect_evidence stub")
-
-    from agents.evidence.shipping import shipping_agent
-    from agents.evidence.transaction import transaction_agent
-
-    state = transaction_agent(state)
-    return shipping_agent(state)
-
-
-def collect_food_evidence(state: ChargebackState) -> ChargebackState:
-    return _log_stub("collect_food_evidence", state)
-
-
-def scoring_agent(state: ChargebackState) -> ChargebackState:
-    return _log_stub("scoring", state)
-
-
-def rebuttal_builder_agent(state: ChargebackState) -> ChargebackState:
-    return _log_stub("rebuttal_builder", state)
-
-
-def quality_check_agent(state: ChargebackState) -> ChargebackState:
-    return _log_stub("quality_check", state)
-
-
-def filing_agent(state: ChargebackState) -> ChargebackState:
-    return _log_stub("filing", state)
-
-
-def learning_agent(state: ChargebackState) -> ChargebackState:
-    return _log_stub("learning", state)
-
-
-def accept_and_log(state: ChargebackState) -> ChargebackState:
-    return _log_stub("accept_and_log", state)
-
-
 def human_escalation(state: ChargebackState) -> ChargebackState:
-    return _log_stub("human_escalation", state)
+    logger.info("Escalating chargeback %s for human review", state["chargeback_id"])
+    state["filing_confirmation"] = "human_review_required"
+    return state
 
 
-def route_food_agents(state: ChargebackState) -> Literal["food", "standard"]:
+def route_food_evidence(state: ChargebackState) -> Literal["food", "standard"]:
     if state.get("requires_food_agents"):
         return "food"
     return "standard"
@@ -84,8 +58,13 @@ def build_graph():
     graph = StateGraph(ChargebackState)
 
     graph.add_node("orchestrator", orchestrator_agent)
-    graph.add_node("collect_evidence", collect_evidence_parallel)
-    graph.add_node("collect_food_evidence", collect_food_evidence)
+    graph.add_node("transaction_evidence", transaction_agent)
+    graph.add_node("shipping_evidence", shipping_agent)
+    graph.add_node("device_evidence", device_agent)
+    graph.add_node("comms_evidence", comms_agent)
+    graph.add_node("consortium_evidence", consortium_agent)
+    graph.add_node("delivery_photo_evidence", delivery_photo_agent)
+    graph.add_node("order_timeline_evidence", order_timeline_agent)
     graph.add_node("scoring", scoring_agent)
     graph.add_node("rebuttal_builder", rebuttal_builder_agent)
     graph.add_node("quality_check", quality_check_agent)
@@ -95,16 +74,21 @@ def build_graph():
     graph.add_node("human_escalation", human_escalation)
 
     graph.set_entry_point("orchestrator")
-    graph.add_edge("orchestrator", "collect_evidence")
+    graph.add_edge("orchestrator", "transaction_evidence")
+    graph.add_edge("transaction_evidence", "shipping_evidence")
+    graph.add_edge("shipping_evidence", "device_evidence")
+    graph.add_edge("device_evidence", "comms_evidence")
+    graph.add_edge("comms_evidence", "consortium_evidence")
     graph.add_conditional_edges(
-        "collect_evidence",
-        route_food_agents,
+        "consortium_evidence",
+        route_food_evidence,
         {
-            "food": "collect_food_evidence",
+            "food": "delivery_photo_evidence",
             "standard": "scoring",
         },
     )
-    graph.add_edge("collect_food_evidence", "scoring")
+    graph.add_edge("delivery_photo_evidence", "order_timeline_evidence")
+    graph.add_edge("order_timeline_evidence", "scoring")
     graph.add_conditional_edges(
         "scoring",
         route_decision,
