@@ -4,7 +4,9 @@ from core.graph import app
 from core.state import ChargebackState
 
 
-def test_chargeback_graph_runs_from_start_to_end() -> None:
+def test_chargeback_graph_runs_from_start_to_end(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(tmp_path))
+
     now = datetime(2026, 5, 12, tzinfo=timezone.utc)
     state: ChargebackState = {
         "chargeback_id": "cb_test_001",
@@ -50,4 +52,12 @@ def test_chargeback_graph_runs_from_start_to_end() -> None:
     result = app.invoke(state)
 
     assert result["chargeback_id"] == "cb_test_001"
-    assert result["decision"] == "ACCEPT"
+    assert result["decision"] == "FIGHT"
+    assert result["transaction"] is not None
+    assert result["shipping"] is not None
+    assert result["device"] is not None
+    assert result["comms"] is not None
+    assert result["consortium"] is not None
+    assert result["quality_approved"] is True
+    assert result["rebuttal_document_path"] is not None
+    assert result["filing_confirmation"] == "filed_visa_cb_test_001"
