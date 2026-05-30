@@ -3,6 +3,7 @@ from typing import Literal
 
 from langgraph.graph import END, StateGraph
 
+from agents.acceptance import accept_and_log_agent
 from agents.evidence.comms import comms_agent
 from agents.evidence.consortium import consortium_agent
 from agents.evidence.delivery_photo import delivery_photo_agent
@@ -10,6 +11,7 @@ from agents.evidence.device import device_agent
 from agents.evidence.order_timeline import order_timeline_agent
 from agents.evidence.shipping import shipping_agent
 from agents.evidence.transaction import transaction_agent
+from agents.escalation import human_escalation_agent
 from agents.filing import filing_agent
 from agents.learning import learning_agent
 from agents.orchestrator import orchestrator_agent
@@ -20,18 +22,6 @@ from core.state import ChargebackState
 
 
 logger = logging.getLogger(__name__)
-
-
-def accept_and_log(state: ChargebackState) -> ChargebackState:
-    logger.info("Accepting chargeback %s", state["chargeback_id"])
-    state["filing_confirmation"] = "accepted_no_filing"
-    return state
-
-
-def human_escalation(state: ChargebackState) -> ChargebackState:
-    logger.info("Escalating chargeback %s for human review", state["chargeback_id"])
-    state["filing_confirmation"] = "human_review_required"
-    return state
 
 
 def route_food_evidence(state: ChargebackState) -> Literal["food", "standard"]:
@@ -70,8 +60,8 @@ def build_graph():
     graph.add_node("quality_check", quality_check_agent)
     graph.add_node("filing", filing_agent)
     graph.add_node("learning", learning_agent)
-    graph.add_node("accept_and_log", accept_and_log)
-    graph.add_node("human_escalation", human_escalation)
+    graph.add_node("accept_and_log", accept_and_log_agent)
+    graph.add_node("human_escalation", human_escalation_agent)
 
     graph.set_entry_point("orchestrator")
     graph.add_edge("orchestrator", "transaction_evidence")
