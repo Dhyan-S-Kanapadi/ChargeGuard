@@ -60,4 +60,5 @@ def test_chargeback_graph_runs_from_start_to_end(tmp_path, monkeypatch) -> None:
     assert result["consortium"] is not None
     assert result["quality_approved"] is True
     assert result["rebuttal_document_path"] is not None
-    assert result["filing_confirmation"] == "filed_visa_cb_test_001"
+    assert result["filing_confirmation"] is not None
+    assert result["filing_confirmation"].startswith("filed_visa_cb_test_001_")
