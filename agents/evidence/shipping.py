@@ -8,6 +8,12 @@ from core.state import ChargebackState, ShippingEvidence
 logger = logging.getLogger(__name__)
 
 
+def _bool_from_any(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "signed", "obtained"}
+    return bool(value)
+
+
 def _empty_shipping_evidence(
     state: ChargebackState,
     *,
@@ -63,30 +69,76 @@ def _stub_tracking_response(state: ChargebackState) -> dict[str, Any]:
     }
 
 
-def _parse_datetime(value: str | None) -> datetime | None:
+def _parse_datetime(value: Any) -> datetime | None:
     if not value:
         return None
+    if isinstance(value, datetime):
+        parsed = value
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
 
-    parsed = datetime.fromisoformat(value)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        logger.warning("Unable to parse shipping timestamp %r", value)
+        return None
+
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed
 
 
+def _extract_location(tracking: dict[str, Any]) -> tuple[float | None, float | None]:
+    location = tracking.get("delivery_location") or tracking.get("location") or {}
+    gps = tracking.get("gps") or {}
+
+    latitude = (
+        location.get("latitude")
+        or location.get("lat")
+        or gps.get("latitude")
+        or gps.get("lat")
+        or tracking.get("delivery_latitude")
+    )
+    longitude = (
+        location.get("longitude")
+        or location.get("lng")
+        or location.get("lon")
+        or gps.get("longitude")
+        or gps.get("lng")
+        or gps.get("lon")
+        or tracking.get("delivery_longitude")
+    )
+    return latitude, longitude
+
+
+def _extract_proof(tracking: dict[str, Any]) -> dict[str, Any]:
+    proof = tracking.get("proof_of_delivery") or tracking.get("pod") or {}
+    return {
+        "signature_obtained": (
+            proof.get("signature_obtained")
+            or proof.get("signature")
+            or tracking.get("signature_obtained")
+            or False
+        ),
+        "photo_url": proof.get("photo_url") or proof.get("image_url") or tracking.get("delivery_photo_url"),
+    }
+
+
 def _build_shipping_evidence(
     tracking: dict[str, Any],
 ) -> ShippingEvidence:
-    location = tracking.get("delivery_location") or {}
-    proof = tracking.get("proof_of_delivery") or {}
+    latitude, longitude = _extract_location(tracking)
+    proof = _extract_proof(tracking)
 
     return {
-        "tracking_id": str(tracking.get("tracking_id") or ""),
-        "courier": str(tracking.get("courier") or ""),
-        "status": str(tracking.get("status") or "UNKNOWN"),
-        "delivered_at": _parse_datetime(tracking.get("delivered_at")),
-        "delivery_latitude": location.get("latitude"),
-        "delivery_longitude": location.get("longitude"),
-        "signature_obtained": bool(proof.get("signature_obtained")),
+        "tracking_id": str(tracking.get("tracking_id") or tracking.get("awb") or tracking.get("waybill") or ""),
+        "courier": str(tracking.get("courier") or tracking.get("carrier") or ""),
+        "status": str(tracking.get("status") or tracking.get("current_status") or "UNKNOWN"),
+        "delivered_at": _parse_datetime(tracking.get("delivered_at") or tracking.get("delivery_time")),
+        "delivery_latitude": latitude,
+        "delivery_longitude": longitude,
+        "signature_obtained": _bool_from_any(proof.get("signature_obtained")),
         "delivery_photo_url": proof.get("photo_url"),
         "raw": {
             "source": "shipping_agent_stub",
