@@ -1,1 +1,38 @@
-{}
+{
+  "10.4": {
+    "name": "Other Fraud - Card-Absent Environment",
+    "required_evidence": ["transaction", "device", "consortium"],
+    "evidence_priority": ["consortium", "device", "transaction"],
+    "key_arguments": [
+      "3DS authentication completed",
+      "Device fingerprint matches transaction evidence",
+      "Consortium alert status documented"
+    ],
+    "win_rate_baseline": 0.62,
+    "filing_window_days": 30
+  },
+  "13.1": {
+    "name": "Merchandise/Services Not Received",
+    "required_evidence": ["shipping", "comms", "transaction"],
+    "evidence_priority": ["shipping", "comms", "transaction"],
+    "key_arguments": [
+      "Proof of delivery documented",
+      "Delivery location and signature documented",
+      "Customer communication timeline documented"
+    ],
+    "win_rate_baseline": 0.71,
+    "filing_window_days": 30
+  },
+  "13.3": {
+    "name": "Not as Described or Defective Merchandise/Services",
+    "required_evidence": ["transaction", "comms", "shipping"],
+    "evidence_priority": ["comms", "transaction", "shipping"],
+    "key_arguments": [
+      "Order details match the purchased item or service",
+      "Customer communication and remedy history documented",
+      "Fulfilment evidence documented"
+    ],
+    "win_rate_baseline": 0.58,
+    "filing_window_days": 30
+  }
+}

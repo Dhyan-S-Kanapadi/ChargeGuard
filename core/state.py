@@ -60,6 +60,7 @@ class DeviceEvidence(TypedDict):
 
 
 class ConsortiumEvidence(TypedDict):
+    lookup_complete: bool
     ethoca_match: bool
     verifi_match: bool
     cross_merchant_fraud_history: bool
@@ -91,6 +92,7 @@ class ChargebackState(TypedDict):
     payment_id: NotRequired[str]
     tracking_id: NotRequired[str]
     chargeback_received_at: NotRequired[datetime]
+    card_fingerprint: NotRequired[str]
     reason_code: str
     card_network: Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"]
     dispute_amount: float

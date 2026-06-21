@@ -28,6 +28,7 @@ def _synthetic_row(rng: random.Random) -> FeatureRow:
         "fraud_score": round(min(max(rng.gauss(36, 22), 0), 100), 2),
         "vpn_detected": _bernoulli(rng, 0.14),
         "geolocation_match": _bernoulli(rng, 0.76),
+        "consortium_lookup_complete": 1,
         "consortium_match": consortium_match,
         "cross_merchant_fraud": cross_merchant_fraud,
         "post_delivery_contact": delivery_confirmed * _bernoulli(rng, 0.34),

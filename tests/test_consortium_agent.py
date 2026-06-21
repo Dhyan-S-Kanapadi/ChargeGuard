@@ -51,11 +51,13 @@ def _state() -> ChargebackState:
     }
 
 
-def test_consortium_agent_populates_only_consortium_evidence() -> None:
+def test_consortium_agent_populates_only_consortium_evidence(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
     state = _state()
     result = consortium_agent(state)
 
     assert result["consortium"] is not None
+    assert result["consortium"]["lookup_complete"] is True
     assert result["consortium"]["ethoca_match"] is False
     assert result["consortium"]["verifi_match"] is False
     assert result["consortium"]["cross_merchant_fraud_history"] is False
@@ -89,13 +91,44 @@ def test_consortium_agent_records_empty_evidence_on_collection_failure(monkeypat
     def fail_consortium_collection(state: ChargebackState) -> dict:
         raise RuntimeError("network intelligence unavailable")
 
-    monkeypatch.setattr(consortium, "_stub_consortium_response", fail_consortium_collection)
+    monkeypatch.setattr(consortium, "_collect_consortium_data", fail_consortium_collection)
 
     state = _state()
     result = consortium_agent(state)
 
     assert result["consortium"] is not None
+    assert result["consortium"]["lookup_complete"] is False
     assert result["consortium"]["ethoca_match"] is False
     assert result["consortium"]["verifi_match"] is False
     assert result["consortium"]["raw"]["source"] == "consortium_agent_empty"
     assert result["consortium"]["raw"]["error"] == "network intelligence unavailable"
+
+
+def test_consortium_agent_keeps_ethoca_match_when_verifi_fails(monkeypatch) -> None:
+    class FakeEthocaClient:
+        def search_alerts(self, identifiers: dict[str, str]) -> dict:
+            assert identifiers["payment_id"] == "pay_demo_001"
+            return {"alerts": [{"id": "alert_001"}], "dispute_count": 2}
+
+    monkeypatch.delenv("CHARGEGUARD_USE_STUBS", raising=False)
+    monkeypatch.setattr(
+        consortium.EthocaClient,
+        "from_env",
+        classmethod(lambda cls: FakeEthocaClient()),
+    )
+    monkeypatch.setattr(
+        consortium.VerifiClient,
+        "from_env",
+        classmethod(lambda cls: (_ for _ in ()).throw(RuntimeError("Verifi unavailable"))),
+    )
+
+    result = consortium_agent(_state())
+
+    assert result["consortium"] is not None
+    assert result["consortium"]["lookup_complete"] is False
+    assert result["consortium"]["ethoca_match"] is True
+    assert result["consortium"]["verifi_match"] is False
+    assert result["consortium"]["cross_merchant_fraud_history"] is True
+    assert result["consortium"]["raw"]["response"]["source_errors"] == {
+        "verifi": "Verifi unavailable"
+    }

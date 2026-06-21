@@ -90,7 +90,7 @@ def test_rebuttal_packet_includes_status_sections_and_evidence() -> None:
     assert packet["evidence"]["transaction"] is not None
 
 
-def test_rebuttal_builder_writes_json_packet(tmp_path, monkeypatch) -> None:
+def test_rebuttal_builder_writes_pdf_and_fact_sidecar(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(tmp_path))
 
     result = rebuttal_builder_agent(_state())
@@ -98,6 +98,20 @@ def test_rebuttal_builder_writes_json_packet(tmp_path, monkeypatch) -> None:
     assert result["rebuttal_document_path"] is not None
     path = Path(result["rebuttal_document_path"])
     assert path.exists()
-    packet = json.loads(path.read_text(encoding="utf-8"))
+    assert path.suffix == ".pdf"
+    assert path.read_bytes().startswith(b"%PDF-")
+    packet = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
     assert packet["chargeback_id"] == "cb_rebuttal_001"
     assert packet["sections"][0]["title"] == "Dispute summary"
+
+
+def test_rebuttal_pdf_is_deterministic(tmp_path, monkeypatch) -> None:
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+
+    monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(first_dir))
+    first_path = Path(rebuttal_builder_agent(_state())["rebuttal_document_path"])
+    monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(second_dir))
+    second_path = Path(rebuttal_builder_agent(_state())["rebuttal_document_path"])
+
+    assert first_path.read_bytes() == second_path.read_bytes()

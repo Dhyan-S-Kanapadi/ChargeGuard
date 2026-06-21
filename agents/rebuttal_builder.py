@@ -5,9 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from core.state import ChargebackState
+from documents.pdf_builder import build_rebuttal_pdf
 
 
 logger = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _output_dir() -> Path:
@@ -48,7 +50,11 @@ def _strongest_evidence(state: ChargebackState) -> list[str]:
         evidence.append("Low device fraud score")
     if comms and comms["post_delivery_interaction"]:
         evidence.append("Customer interacted after delivery")
-    if consortium and not consortium["cross_merchant_fraud_history"]:
+    if (
+        consortium
+        and consortium.get("lookup_complete")
+        and not consortium["cross_merchant_fraud_history"]
+    ):
         evidence.append("No cross-merchant fraud history")
     if delivery_photo and delivery_photo["ai_verified"]:
         evidence.append("Delivery photo verified")
@@ -79,11 +85,46 @@ def _rebuttal_sections(state: ChargebackState) -> list[dict[str, str]]:
     ]
 
 
+def _playbook_path(state: ChargebackState) -> Path:
+    network = state["card_network"].lower()
+    filename = "mastercard_playbooks.json" if network == "mastercard" else "visa_playbooks.json"
+    return PROJECT_ROOT / "documents" / "playbooks" / filename
+
+
+def _template_network(state: ChargebackState) -> str:
+    return "mastercard" if state["card_network"] == "MASTERCARD" else "visa"
+
+
+def _load_playbook(state: ChargebackState) -> dict[str, Any]:
+    playbooks = json.loads(_playbook_path(state).read_text(encoding="utf-8"))
+    try:
+        return playbooks[state["reason_code"]]
+    except KeyError as exc:
+        raise ValueError(
+            f"No {state['card_network']} playbook for reason code {state['reason_code']}"
+        ) from exc
+
+
+def _load_template(state: ChargebackState) -> str:
+    network = _template_network(state)
+    path = (
+        PROJECT_ROOT
+        / "documents"
+        / "templates"
+        / network
+        / f"{state['reason_code']}.md"
+    )
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return " ".join(line.strip() for line in lines if line and not line.startswith("#"))
+
+
 def _build_rebuttal_packet(state: ChargebackState) -> dict[str, Any]:
+    playbook = _load_playbook(state)
     return {
         "chargeback_id": state["chargeback_id"],
         "merchant": state["merchant_profile"]["name"],
         "reason_code": state["reason_code"],
+        "reason_name": playbook["name"],
         "card_network": state["card_network"],
         "amount": state["dispute_amount"],
         "currency": state["currency"],
@@ -91,6 +132,8 @@ def _build_rebuttal_packet(state: ChargebackState) -> dict[str, Any]:
         "expected_value": state.get("expected_value"),
         "decision_reasoning": state.get("decision_reasoning"),
         "evidence_status": _evidence_status(state),
+        "required_evidence": playbook["required_evidence"],
+        "evidence_priority": playbook["evidence_priority"],
         "strongest_evidence": _strongest_evidence(state),
         "sections": _rebuttal_sections(state),
         "evidence": {
@@ -106,14 +149,19 @@ def _build_rebuttal_packet(state: ChargebackState) -> dict[str, Any]:
 
 
 def rebuttal_builder_agent(state: ChargebackState) -> ChargebackState:
-    """Build a deterministic rebuttal packet for downstream PDF generation/filing."""
+    """Build a deterministic PDF and structured fact sidecar."""
     logger.info("Running rebuttal builder agent for %s", state["chargeback_id"])
 
     output_dir = _output_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / f"{state['chargeback_id']}_rebuttal.json"
+    pdf_path = output_dir / f"{state['chargeback_id']}_rebuttal.pdf"
+    packet_path = pdf_path.with_suffix(".json")
 
     packet = _build_rebuttal_packet(state)
-    path.write_text(json.dumps(packet, default=str, indent=2), encoding="utf-8")
-    state["rebuttal_document_path"] = str(path)
+    packet_path.write_text(
+        json.dumps(packet, default=str, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    build_rebuttal_pdf(packet, pdf_path, template_text=_load_template(state))
+    state["rebuttal_document_path"] = str(pdf_path)
     return state

@@ -14,6 +14,7 @@ FEATURE_NAMES: Final[tuple[str, ...]] = (
     "fraud_score",
     "vpn_detected",
     "geolocation_match",
+    "consortium_lookup_complete",
     "consortium_match",
     "cross_merchant_fraud",
     "post_delivery_contact",
@@ -80,6 +81,7 @@ def features_from_state(state: ChargebackState) -> dict[str, float | int]:
         "fraud_score": min(max(float(device.get("fraud_score", 0.0)), 0.0), 100.0),
         "vpn_detected": int(bool(device.get("vpn_detected"))),
         "geolocation_match": int(bool(device.get("geolocation_match"))),
+        "consortium_lookup_complete": int(bool(consortium.get("lookup_complete"))),
         "consortium_match": int(
             bool(consortium.get("ethoca_match")) or bool(consortium.get("verifi_match"))
         ),
