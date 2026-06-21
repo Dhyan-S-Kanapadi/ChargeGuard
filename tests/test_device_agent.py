@@ -64,7 +64,8 @@ def _state() -> ChargebackState:
     }
 
 
-def test_device_agent_populates_only_device_evidence() -> None:
+def test_device_agent_populates_only_device_evidence(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
     state = _state()
     result = device_agent(state)
 
@@ -97,10 +98,10 @@ def test_device_builder_accepts_provider_payload_variants() -> None:
 
 
 def test_device_agent_records_conservative_evidence_on_collection_failure(monkeypatch) -> None:
-    def fail_device_collection(state: ChargebackState) -> dict:
+    def fail_device_collection(state: ChargebackState) -> tuple[dict, str]:
         raise RuntimeError("seon unavailable")
 
-    monkeypatch.setattr(device, "_stub_device_risk_response", fail_device_collection)
+    monkeypatch.setattr(device, "_collect_device_data", fail_device_collection)
 
     state = _state()
     result = device_agent(state)
@@ -112,3 +113,53 @@ def test_device_agent_records_conservative_evidence_on_collection_failure(monkey
     assert result["device"]["vpn_detected"] is True
     assert result["device"]["raw"]["source"] == "device_agent_empty"
     assert result["device"]["raw"]["error"] == "seon unavailable"
+
+
+def test_device_agent_collects_and_normalizes_seon(monkeypatch) -> None:
+    class FakeSeonClient:
+        def fraud_check(self, payload: dict) -> dict:
+            assert payload["ip"] == "49.36.18.22"
+            assert payload["device_id"] == "device_demo_123"
+            assert payload["email"] == "buyer@example.com"
+            return {
+                "success": True,
+                "data": {
+                    "fraud_score": 24,
+                    "device_details": {"device_hash": "seon_hash_123"},
+                    "ip_details": {
+                        "is_vpn": False,
+                        "latitude": 12.9717,
+                        "longitude": 77.5947,
+                    },
+                    "behavior": {"is_normal": True},
+                },
+            }
+
+    state = _state()
+    state["shipping"] = {
+        "tracking_id": "trk_demo_001",
+        "courier": "Shiprocket",
+        "status": "DELIVERED",
+        "delivered_at": None,
+        "delivery_latitude": 12.9716,
+        "delivery_longitude": 77.5946,
+        "signature_obtained": True,
+        "delivery_photo_url": None,
+        "raw": {},
+    }
+    monkeypatch.delenv("CHARGEGUARD_USE_STUBS", raising=False)
+    monkeypatch.setattr(
+        device.SeonClient,
+        "from_env",
+        classmethod(lambda cls: FakeSeonClient()),
+    )
+
+    result = device_agent(state)
+
+    assert result["device"] is not None
+    assert result["device"]["fraud_score"] == 24.0
+    assert result["device"]["device_fingerprint"] == "seon_hash_123"
+    assert result["device"]["geolocation_match"] is True
+    assert result["device"]["login_pattern_normal"] is True
+    assert result["device"]["vpn_detected"] is False
+    assert result["device"]["raw"]["source"] == "seon"
