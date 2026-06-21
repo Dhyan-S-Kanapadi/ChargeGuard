@@ -7,6 +7,7 @@ from ml.train import train_baseline_model
 
 def test_chargeback_graph_runs_from_start_to_end(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
     model_path = tmp_path / "win_probability_model.pkl"
     train_baseline_model(output_path=model_path, count=200, seed=42)
     monkeypatch.setenv("MODEL_PATH", str(model_path))

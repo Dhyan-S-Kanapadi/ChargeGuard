@@ -6,6 +6,7 @@ class MerchantProfile(TypedDict):
     merchant_id: str
     name: str
     vertical: Literal["ecommerce", "food_delivery", "quick_commerce"]
+    payment_provider: NotRequired[Literal["razorpay", "stripe"]]
     razorpay_key: str
     shiprocket_key: str
     freshdesk_domain: str

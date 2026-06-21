@@ -1,10 +1,27 @@
 import logging
+import os
 from typing import Any
 
 from core.state import ChargebackState, TransactionEvidence
+from integrations.razorpay import RazorpayClient
+from integrations.stripe import StripeClient
 
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _payment_provider(state: ChargebackState) -> str:
+    configured = state["merchant_profile"].get("payment_provider")
+    if configured:
+        return configured
+    return "razorpay" if state["currency"].upper() == "INR" else "stripe"
 
 
 def _bool_from_any(value: Any) -> bool:
@@ -133,6 +150,8 @@ def _build_transaction_evidence(
     state: ChargebackState,
     payment: dict[str, Any],
     order: dict[str, Any],
+    *,
+    source: str = "transaction_agent_stub",
 ) -> TransactionEvidence:
     notes = payment.get("notes") or {}
     metadata = payment.get("metadata") or {}
@@ -152,20 +171,94 @@ def _build_transaction_evidence(
         "order_history_count": int(customer.get("order_history_count") or 0),
         "previous_chargebacks": int(customer.get("previous_chargebacks") or 0),
         "raw": {
-            "source": "transaction_agent_stub",
+            "source": source,
             "payment": payment,
             "order": order,
         },
     }
 
 
+def _collect_razorpay(state: ChargebackState) -> tuple[dict[str, Any], dict[str, Any]]:
+    payment_id = state.get("payment_id")
+    order_id = state.get("order_id")
+    if not payment_id or not order_id:
+        raise ValueError("Razorpay collection requires payment_id and order_id")
+
+    client = RazorpayClient.from_env()
+    return client.get_payment(payment_id), client.get_order(order_id)
+
+
+def _collect_stripe(state: ChargebackState) -> tuple[dict[str, Any], dict[str, Any]]:
+    payment_id = state.get("payment_id")
+    if not payment_id:
+        raise ValueError("Stripe collection requires payment_id")
+
+    client = StripeClient.from_env()
+    payment_intent = client.get_payment_intent(payment_id)
+    latest_charge_id = payment_intent.get("latest_charge")
+    charge = client.get_charge(latest_charge_id) if isinstance(latest_charge_id, str) else {}
+    metadata = payment_intent.get("metadata") or {}
+    charge_details = charge.get("payment_method_details") or {}
+    card_details = charge_details.get("card") or {}
+    three_ds = card_details.get("three_d_secure") or {}
+    three_ds_result = str(three_ds.get("result") or "").lower()
+
+    payment = {
+        "id": payment_intent.get("id") or payment_id,
+        "order_id": metadata.get("order_id") or state.get("order_id", ""),
+        "amount": payment_intent.get("amount"),
+        "currency": str(payment_intent.get("currency") or state["currency"]).upper(),
+        "customer_email": payment_intent.get("receipt_email") or charge.get("receipt_email"),
+        "metadata": metadata,
+        "three_ds_authenticated": three_ds_result in {
+            "authenticated",
+            "attempt_acknowledged",
+        },
+        "otp_verified": False,
+        "provider_raw": {
+            "payment_intent": payment_intent,
+            "charge": charge,
+        },
+    }
+    order = {
+        "id": payment["order_id"],
+        "status": payment_intent.get("status"),
+        "customer": {
+            "email": payment["customer_email"],
+            "order_history_count": metadata.get("order_history_count", 0),
+            "previous_chargebacks": metadata.get("previous_chargebacks", 0),
+        },
+    }
+    return payment, order
+
+
+def _collect_transaction_data(
+    state: ChargebackState,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    if _env_flag("CHARGEGUARD_USE_STUBS"):
+        return _stub_payment_response(state), _stub_order_response(state), "transaction_agent_stub"
+
+    provider = _payment_provider(state)
+    if provider == "razorpay":
+        payment, order = _collect_razorpay(state)
+    elif provider == "stripe":
+        payment, order = _collect_stripe(state)
+    else:
+        raise ValueError(f"Unsupported payment provider: {provider}")
+    return payment, order, provider
+
+
 def transaction_agent(state: ChargebackState) -> ChargebackState:
     logger.info("Running transaction agent")
 
     try:
-        payment = _stub_payment_response(state)
-        order = _stub_order_response(state)
-        state["transaction"] = _build_transaction_evidence(state, payment, order)
+        payment, order, source = _collect_transaction_data(state)
+        state["transaction"] = _build_transaction_evidence(
+            state,
+            payment,
+            order,
+            source=source,
+        )
     except Exception as exc:
         logger.exception("Transaction evidence collection failed")
         state["transaction"] = _empty_transaction_evidence(state, error=str(exc))

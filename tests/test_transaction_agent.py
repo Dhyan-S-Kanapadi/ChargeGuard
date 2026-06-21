@@ -51,7 +51,8 @@ def _state() -> ChargebackState:
     }
 
 
-def test_transaction_agent_populates_only_transaction_evidence() -> None:
+def test_transaction_agent_populates_only_transaction_evidence(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
     state = _state()
     result = transaction_agent(state)
 
@@ -102,11 +103,90 @@ def test_transaction_builder_accepts_provider_payload_variants() -> None:
     assert evidence["previous_chargebacks"] == 1
 
 
+def test_transaction_agent_collects_razorpay_evidence(monkeypatch) -> None:
+    class FakeRazorpayClient:
+        def get_payment(self, payment_id: str) -> dict:
+            return {
+                "id": payment_id,
+                "order_id": "order_demo_001",
+                "amount": 250000,
+                "currency": "INR",
+                "email": "real@example.com",
+                "three_ds_authenticated": True,
+                "otp_verified": True,
+            }
+
+        def get_order(self, order_id: str) -> dict:
+            return {"id": order_id, "customer": {"email": "real@example.com"}}
+
+    monkeypatch.delenv("CHARGEGUARD_USE_STUBS", raising=False)
+    monkeypatch.setattr(
+        transaction.RazorpayClient,
+        "from_env",
+        classmethod(lambda cls: FakeRazorpayClient()),
+    )
+
+    result = transaction_agent(_state())
+
+    assert result["transaction"] is not None
+    assert result["transaction"]["customer_email"] == "real@example.com"
+    assert result["transaction"]["raw"]["source"] == "razorpay"
+
+
+def test_transaction_agent_normalizes_stripe_evidence(monkeypatch) -> None:
+    class FakeStripeClient:
+        def get_payment_intent(self, payment_id: str) -> dict:
+            return {
+                "id": payment_id,
+                "amount": 4200,
+                "currency": "usd",
+                "receipt_email": "stripe@example.com",
+                "latest_charge": "ch_demo_001",
+                "status": "succeeded",
+                "metadata": {
+                    "order_id": "order_stripe_001",
+                    "device_id": "stripe_device_001",
+                    "order_history_count": "3",
+                },
+            }
+
+        def get_charge(self, charge_id: str) -> dict:
+            return {
+                "id": charge_id,
+                "payment_method_details": {
+                    "card": {
+                        "three_d_secure": {
+                            "result": "authenticated",
+                        }
+                    }
+                },
+            }
+
+    state = _state()
+    state["currency"] = "USD"
+    state["merchant_profile"]["payment_provider"] = "stripe"
+    monkeypatch.delenv("CHARGEGUARD_USE_STUBS", raising=False)
+    monkeypatch.setattr(
+        transaction.StripeClient,
+        "from_env",
+        classmethod(lambda cls: FakeStripeClient()),
+    )
+
+    result = transaction_agent(state)
+
+    assert result["transaction"] is not None
+    assert result["transaction"]["amount"] == 42.0
+    assert result["transaction"]["currency"] == "USD"
+    assert result["transaction"]["three_ds_authenticated"] is True
+    assert result["transaction"]["order_history_count"] == 3
+    assert result["transaction"]["raw"]["source"] == "stripe"
+
+
 def test_transaction_agent_records_empty_evidence_on_collection_failure(monkeypatch) -> None:
-    def fail_payment_collection(state: ChargebackState) -> dict:
+    def fail_collection(state: ChargebackState) -> tuple[dict, dict, str]:
         raise RuntimeError("provider unavailable")
 
-    monkeypatch.setattr(transaction, "_stub_payment_response", fail_payment_collection)
+    monkeypatch.setattr(transaction, "_collect_transaction_data", fail_collection)
 
     state = _state()
     result = transaction_agent(state)
