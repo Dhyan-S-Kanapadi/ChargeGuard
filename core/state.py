@@ -90,6 +90,7 @@ class ChargebackState(TypedDict):
     order_id: NotRequired[str]
     payment_id: NotRequired[str]
     tracking_id: NotRequired[str]
+    chargeback_received_at: NotRequired[datetime]
     reason_code: str
     card_network: Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"]
     dispute_amount: float

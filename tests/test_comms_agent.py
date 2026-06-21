@@ -64,8 +64,21 @@ def _state() -> ChargebackState:
     }
 
 
-def test_comms_agent_populates_only_comms_evidence() -> None:
+def test_comms_agent_populates_only_comms_evidence(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
     state = _state()
+    delivered_at = state["filing_deadline"] - timedelta(days=12)
+    state["shipping"] = {
+        "tracking_id": "trk_demo_001",
+        "courier": "Shiprocket",
+        "status": "DELIVERED",
+        "delivered_at": delivered_at,
+        "delivery_latitude": None,
+        "delivery_longitude": None,
+        "signature_obtained": False,
+        "delivery_photo_url": None,
+        "raw": {},
+    }
     result = comms_agent(state)
 
     assert result["comms"] is not None
@@ -73,17 +86,30 @@ def test_comms_agent_populates_only_comms_evidence() -> None:
     assert result["comms"]["emails"][0]["to"] == "buyer@example.com"
     assert result["comms"]["post_delivery_interaction"] is True
     assert result["comms"]["complaint_raised_before_chargeback"] is False
-    assert result["shipping"] is None
+    assert result["shipping"]["delivered_at"] == delivered_at
     assert result["device"] is None
 
 
 def test_comms_builder_detects_pre_chargeback_complaints() -> None:
     state = _state()
+    delivered_at = state["filing_deadline"] - timedelta(days=12)
+    state["shipping"] = {
+        "tracking_id": "trk_demo_001",
+        "courier": "Shiprocket",
+        "status": "DELIVERED",
+        "delivered_at": delivered_at,
+        "delivery_latitude": None,
+        "delivery_longitude": None,
+        "signature_obtained": False,
+        "delivery_photo_url": None,
+        "raw": {},
+    }
+    state["chargeback_received_at"] = delivered_at + timedelta(days=3)
     emails = [
         {
             "from": "buyer@example.com",
             "direction": "inbound",
-            "category": "post_delivery_interaction",
+            "timestamp": (delivered_at + timedelta(hours=1)).isoformat(),
         }
     ]
     support_tickets = [
@@ -91,6 +117,7 @@ def test_comms_builder_detects_pre_chargeback_complaints() -> None:
             "id": "ticket_001",
             "type": "pre_chargeback_complaint",
             "raised_before_chargeback": True,
+            "created_at": (delivered_at + timedelta(days=1)).isoformat(),
         }
     ]
 
@@ -102,10 +129,10 @@ def test_comms_builder_detects_pre_chargeback_complaints() -> None:
 
 
 def test_comms_agent_records_empty_evidence_on_collection_failure(monkeypatch) -> None:
-    def fail_email_collection(state: ChargebackState) -> list[dict]:
+    def fail_collection(state: ChargebackState) -> tuple[list[dict], list[dict], dict]:
         raise RuntimeError("gmail unavailable")
 
-    monkeypatch.setattr(comms, "_stub_email_response", fail_email_collection)
+    monkeypatch.setattr(comms, "_collect_communications", fail_collection)
 
     state = _state()
     result = comms_agent(state)
@@ -115,3 +142,33 @@ def test_comms_agent_records_empty_evidence_on_collection_failure(monkeypatch) -
     assert result["comms"]["post_delivery_interaction"] is False
     assert result["comms"]["raw"]["source"] == "comms_agent_empty"
     assert result["comms"]["raw"]["error"] == "gmail unavailable"
+
+
+def test_comms_agent_keeps_freshdesk_when_gmail_fails(monkeypatch) -> None:
+    state = _state()
+    state["chargeback_received_at"] = state["filing_deadline"] - timedelta(days=20)
+    monkeypatch.delenv("CHARGEGUARD_USE_STUBS", raising=False)
+    monkeypatch.setattr(
+        comms,
+        "_collect_gmail",
+        lambda state: (_ for _ in ()).throw(RuntimeError("gmail unavailable")),
+    )
+    monkeypatch.setattr(
+        comms,
+        "_collect_freshdesk",
+        lambda state: [
+            {
+                "id": 123,
+                "subject": "Problem with order_demo_001",
+                "created_at": "2026-05-15T10:00:00Z",
+            }
+        ],
+    )
+
+    result = comms_agent(state)
+
+    assert result["comms"] is not None
+    assert len(result["comms"]["support_tickets"]) == 1
+    assert result["comms"]["raw"]["source_errors"] == {
+        "gmail": "gmail unavailable"
+    }
