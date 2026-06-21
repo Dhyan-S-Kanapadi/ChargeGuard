@@ -1,7 +1,17 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from agents.scoring import scoring_agent
 from core.state import ChargebackState
+from ml.train import train_baseline_model
+
+
+@pytest.fixture(scope="module")
+def trained_model_path(tmp_path_factory) -> str:
+    path = tmp_path_factory.mktemp("model") / "win_probability_model.pkl"
+    train_baseline_model(output_path=path, count=200, seed=42)
+    return str(path)
 
 
 def _state() -> ChargebackState:
@@ -102,7 +112,11 @@ def _add_strong_evidence(state: ChargebackState) -> ChargebackState:
     return state
 
 
-def test_scoring_agent_fights_when_evidence_is_strong(monkeypatch) -> None:
+def test_scoring_agent_uses_trained_model(
+    monkeypatch,
+    trained_model_path: str,
+) -> None:
+    monkeypatch.setenv("MODEL_PATH", trained_model_path)
     monkeypatch.delenv("RESPONSE_COST_USD", raising=False)
     monkeypatch.delenv("FIGHT_EV_THRESHOLD", raising=False)
 
@@ -113,22 +127,25 @@ def test_scoring_agent_fights_when_evidence_is_strong(monkeypatch) -> None:
     assert result["win_probability"] >= 0.5
     assert result["expected_value"] is not None
     assert result["expected_value"] > 0
-    assert "otp_verified" in result["decision_reasoning"]
+    assert "logistic_regression" in result["decision_reasoning"]
 
 
-def test_scoring_agent_accepts_when_evidence_is_weak(monkeypatch) -> None:
-    monkeypatch.delenv("RESPONSE_COST_USD", raising=False)
-    monkeypatch.delenv("FIGHT_EV_THRESHOLD", raising=False)
+def test_scoring_agent_fails_closed_without_model(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MODEL_PATH", str(tmp_path / "missing.pkl"))
 
     result = scoring_agent(_state())
 
     assert result["decision"] == "ACCEPT"
-    assert result["win_probability"] == 0.18
-    assert result["expected_value"] == 435.0
-    assert result["decision_reasoning"] == "Win probability 18%; expected value 435.00 INR; matched signals: none."
+    assert result["win_probability"] == 0.0
+    assert result["expected_value"] == -15.0
+    assert "model_unavailable" in result["decision_reasoning"]
 
 
-def test_scoring_agent_respects_expected_value_threshold(monkeypatch) -> None:
+def test_scoring_agent_respects_expected_value_threshold(
+    monkeypatch,
+    trained_model_path: str,
+) -> None:
+    monkeypatch.setenv("MODEL_PATH", trained_model_path)
     monkeypatch.setenv("FIGHT_EV_THRESHOLD", "10000")
     monkeypatch.setenv("RESPONSE_COST_USD", "15")
 

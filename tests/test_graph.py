@@ -2,10 +2,14 @@ from datetime import datetime, timedelta, timezone
 
 from core.graph import app
 from core.state import ChargebackState
+from ml.train import train_baseline_model
 
 
 def test_chargeback_graph_runs_from_start_to_end(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(tmp_path))
+    model_path = tmp_path / "win_probability_model.pkl"
+    train_baseline_model(output_path=model_path, count=200, seed=42)
+    monkeypatch.setenv("MODEL_PATH", str(model_path))
 
     now = datetime(2026, 5, 12, tzinfo=timezone.utc)
     state: ChargebackState = {
