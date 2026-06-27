@@ -51,15 +51,26 @@ def _state() -> ChargebackState:
     }
 
 
-def test_learning_agent_marks_unknown_outcome_pending() -> None:
+def test_learning_agent_skips_unknown_outcome() -> None:
     result = learning_agent(_state())
 
-    assert result["final_outcome"] == "PENDING"
-    assert result["outcome_reason"] == "Awaiting network decision."
-    assert result["outcome_recorded_at"] is not None
+    assert result["final_outcome"] is None
+    assert result["outcome_reason"] is None
+    assert result["outcome_recorded_at"] is None
 
 
-def test_learning_agent_adds_win_reason_without_overwriting_outcome() -> None:
+def _configure_learning(monkeypatch, tmp_path, *, threshold: int = 10) -> None:
+    monkeypatch.setenv("TRAINING_DATA_PATH", str(tmp_path / "outcomes.json"))
+    monkeypatch.setenv("TRAINING_METADATA_PATH", str(tmp_path / "metadata.json"))
+    monkeypatch.setenv("PLAYBOOK_STATS_PATH", str(tmp_path / "stats.json"))
+    monkeypatch.setenv("MODEL_PATH", str(tmp_path / "model.pkl"))
+    monkeypatch.setenv("RETRAIN_RECORD_THRESHOLD", str(threshold))
+
+
+def test_learning_agent_adds_win_reason_without_overwriting_outcome(
+    monkeypatch, tmp_path
+) -> None:
+    _configure_learning(monkeypatch, tmp_path)
     state = _state()
     state["final_outcome"] = "WIN"
 
@@ -70,7 +81,8 @@ def test_learning_agent_adds_win_reason_without_overwriting_outcome() -> None:
     assert result["outcome_recorded_at"] is not None
 
 
-def test_learning_agent_preserves_existing_reason() -> None:
+def test_learning_agent_preserves_existing_reason(monkeypatch, tmp_path) -> None:
+    _configure_learning(monkeypatch, tmp_path)
     state = _state()
     state["final_outcome"] = "LOSS"
     state["outcome_reason"] = "Issuer rejected delivery proof."

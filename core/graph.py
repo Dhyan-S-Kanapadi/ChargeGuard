@@ -44,6 +44,12 @@ def route_quality(state: ChargebackState) -> Literal["approved", "retry", "escal
     return "retry"
 
 
+def route_learning(state: ChargebackState) -> Literal["learn", "end"]:
+    if state.get("final_outcome") in {"WIN", "LOSS"}:
+        return "learn"
+    return "end"
+
+
 def build_graph():
     graph = StateGraph(ChargebackState)
 
@@ -87,7 +93,11 @@ def build_graph():
             "ACCEPT": "accept_and_log",
         },
     )
-    graph.add_edge("accept_and_log", "learning")
+    graph.add_conditional_edges(
+        "accept_and_log",
+        route_learning,
+        {"learn": "learning", "end": END},
+    )
     graph.add_edge("rebuttal_builder", "quality_check")
     graph.add_conditional_edges(
         "quality_check",
@@ -98,8 +108,16 @@ def build_graph():
             "escalate": "human_escalation",
         },
     )
-    graph.add_edge("filing", "learning")
-    graph.add_edge("human_escalation", "learning")
+    graph.add_conditional_edges(
+        "filing",
+        route_learning,
+        {"learn": "learning", "end": END},
+    )
+    graph.add_conditional_edges(
+        "human_escalation",
+        route_learning,
+        {"learn": "learning", "end": END},
+    )
     graph.add_edge("learning", END)
 
     return graph
