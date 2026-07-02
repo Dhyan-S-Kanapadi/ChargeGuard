@@ -62,7 +62,9 @@ def _state() -> ChargebackState:
     }
 
 
-def test_delivery_photo_agent_populates_only_delivery_photo_evidence() -> None:
+def test_delivery_photo_agent_populates_only_delivery_photo_evidence(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
+
     state = _state()
     result = delivery_photo_agent(state)
 
@@ -92,7 +94,52 @@ def test_delivery_photo_builder_accepts_vision_payload_variants() -> None:
     assert evidence["timestamp_on_photo"] == captured_at
 
 
+def test_delivery_photo_agent_collects_platform_photo_and_claude_vision(monkeypatch) -> None:
+    monkeypatch.delenv("CHARGEGUARD_USE_STUBS", raising=False)
+
+    class FakePlatformClient:
+        @classmethod
+        def from_env(cls):
+            return cls()
+
+        def get_delivery_photo(self, order_id: str) -> dict:
+            assert order_id == "order_demo_001"
+            return {
+                "photo_url": "https://example.test/platform/pod.jpg",
+                "captured_at": "2026-05-14T10:15:00Z",
+            }
+
+    class FakeVisionClient:
+        @classmethod
+        def from_env(cls):
+            return cls()
+
+        def verify_delivery_photo(self, photo_url: str) -> dict:
+            assert photo_url == "https://example.test/platform/pod.jpg"
+            return {
+                "delivered": True,
+                "address_visible": True,
+                "confidence": 0.93,
+            }
+
+    state = _state()
+    state["shipping"]["delivery_photo_url"] = None
+    monkeypatch.setattr(delivery_photo, "FoodPlatformClient", FakePlatformClient)
+    monkeypatch.setattr(delivery_photo, "ClaudeVisionClient", FakeVisionClient)
+
+    result = delivery_photo_agent(state)
+
+    assert result["delivery_photo"] is not None
+    assert result["delivery_photo"]["photo_url"] == "https://example.test/platform/pod.jpg"
+    assert result["delivery_photo"]["ai_verified"] is True
+    assert result["delivery_photo"]["address_visible"] is True
+    assert result["delivery_photo"]["timestamp_on_photo"].isoformat() == "2026-05-14T10:15:00+00:00"
+    assert result["delivery_photo"]["raw"]["source"] == "claude_vision"
+
+
 def test_delivery_photo_agent_records_empty_evidence_on_collection_failure(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
+
     def fail_photo_verification(state: ChargebackState) -> dict:
         raise RuntimeError("vision unavailable")
 

@@ -62,7 +62,9 @@ def _state() -> ChargebackState:
     }
 
 
-def test_order_timeline_agent_populates_only_order_timeline_evidence() -> None:
+def test_order_timeline_agent_populates_only_order_timeline_evidence(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
+
     state = _state()
     result = order_timeline_agent(state)
 
@@ -93,7 +95,38 @@ def test_order_timeline_builder_accepts_string_timestamps() -> None:
     assert evidence["post_delivery_rating"] == 4.0
 
 
+def test_order_timeline_agent_collects_platform_timeline(monkeypatch) -> None:
+    monkeypatch.delenv("CHARGEGUARD_USE_STUBS", raising=False)
+
+    class FakePlatformClient:
+        @classmethod
+        def from_env(cls):
+            return cls()
+
+        def get_order_timeline(self, order_id: str) -> dict:
+            assert order_id == "order_demo_001"
+            return {
+                "placed_at": "2026-05-14T08:00:00Z",
+                "accepted_at": "2026-05-14T08:03:00Z",
+                "picked_at": "2026-05-14T08:25:00Z",
+                "delivered_at": "2026-05-14T09:10:00Z",
+                "post_delivery_rating": 4.8,
+            }
+
+    monkeypatch.setattr(order_timeline, "FoodPlatformClient", FakePlatformClient)
+
+    result = order_timeline_agent(_state())
+
+    assert result["order_timeline"] is not None
+    assert result["order_timeline"]["placed_at"].isoformat() == "2026-05-14T08:00:00+00:00"
+    assert result["order_timeline"]["delivered_at"].isoformat() == "2026-05-14T09:10:00+00:00"
+    assert result["order_timeline"]["post_delivery_rating"] == 4.8
+    assert result["order_timeline"]["raw"]["source"] == "food_platform"
+
+
 def test_order_timeline_agent_records_empty_evidence_on_collection_failure(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
+
     def fail_timeline_collection(state: ChargebackState) -> dict:
         raise RuntimeError("order system unavailable")
 

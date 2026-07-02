@@ -1,11 +1,20 @@
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from core.state import ChargebackState, OrderTimelineEvidence
+from integrations.food_platform import FoodPlatformClient
 
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -64,7 +73,24 @@ def _stub_order_timeline_response(state: ChargebackState) -> dict[str, Any]:
     }
 
 
-def _build_order_timeline_evidence(response: dict[str, Any]) -> OrderTimelineEvidence:
+def _platform_order_timeline_response(state: ChargebackState) -> dict[str, Any]:
+    order_id = state.get("order_id")
+    if not order_id:
+        raise ValueError("Order timeline collection requires order_id")
+    return FoodPlatformClient.from_env().get_order_timeline(order_id)
+
+
+def _collect_order_timeline_data(state: ChargebackState) -> tuple[dict[str, Any], str]:
+    if _env_flag("CHARGEGUARD_USE_STUBS"):
+        return _stub_order_timeline_response(state), "order_timeline_agent_stub"
+    return _platform_order_timeline_response(state), "food_platform"
+
+
+def _build_order_timeline_evidence(
+    response: dict[str, Any],
+    *,
+    source: str = "order_timeline_agent_stub",
+) -> OrderTimelineEvidence:
     evidence: OrderTimelineEvidence = {
         "placed_at": _parse_datetime(response.get("placed_at")) or datetime.now(timezone.utc),
         "accepted_at": _parse_datetime(response.get("accepted_at")),
@@ -72,7 +98,7 @@ def _build_order_timeline_evidence(response: dict[str, Any]) -> OrderTimelineEvi
         "delivered_at": _parse_datetime(response.get("delivered_at")),
         "post_delivery_rating": response.get("post_delivery_rating") or response.get("rating"),
         "raw": {
-            "source": "order_timeline_agent_stub",
+            "source": source,
             "response": response,
         },
     }
@@ -84,8 +110,8 @@ def order_timeline_agent(state: ChargebackState) -> ChargebackState:
     logger.info("Running order timeline evidence agent for %s", state["chargeback_id"])
 
     try:
-        response = _stub_order_timeline_response(state)
-        state["order_timeline"] = _build_order_timeline_evidence(response)
+        response, source = _collect_order_timeline_data(state)
+        state["order_timeline"] = _build_order_timeline_evidence(response, source=source)
     except Exception as exc:
         logger.exception("Order timeline evidence collection failed")
         state["order_timeline"] = _empty_order_timeline_evidence(state, error=str(exc))
