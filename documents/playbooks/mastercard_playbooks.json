@@ -1,1 +1,14 @@
-{}
+{
+  "4853": {
+    "name": "Cardholder Dispute",
+    "required_evidence": ["transaction", "shipping", "comms"],
+    "evidence_priority": ["transaction", "shipping", "comms"],
+    "key_arguments": [
+      "Transaction authentication documented",
+      "Fulfilment evidence documented",
+      "Customer communication history documented"
+    ],
+    "win_rate_baseline": 0.6,
+    "filing_window_days": 45
+  }
+}

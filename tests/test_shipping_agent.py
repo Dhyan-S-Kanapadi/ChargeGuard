@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from agents.evidence.shipping import shipping_agent
+from agents.evidence import shipping
+from agents.evidence.shipping import _build_shipping_evidence, shipping_agent
 from core.state import ChargebackState
 
 
@@ -51,7 +52,8 @@ def _state() -> ChargebackState:
     }
 
 
-def test_shipping_agent_populates_only_shipping_evidence() -> None:
+def test_shipping_agent_populates_only_shipping_evidence(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
     state = _state()
     result = shipping_agent(state)
 
@@ -63,3 +65,74 @@ def test_shipping_agent_populates_only_shipping_evidence() -> None:
     assert result["shipping"]["signature_obtained"] is True
     assert result["transaction"] is None
     assert result["device"] is None
+
+
+def test_shipping_builder_accepts_provider_payload_variants() -> None:
+    tracking = {
+        "awb": "awb_variant_001",
+        "carrier": "Delhivery",
+        "current_status": "Delivered",
+        "delivery_time": "2026-05-20T10:15:00Z",
+        "gps": {
+            "lat": 19.076,
+            "lng": 72.8777,
+        },
+        "pod": {
+            "signature": "signed",
+            "image_url": "https://example.test/pod/awb_variant_001.jpg",
+        },
+    }
+
+    evidence = _build_shipping_evidence(tracking)
+
+    assert evidence["tracking_id"] == "awb_variant_001"
+    assert evidence["courier"] == "Delhivery"
+    assert evidence["status"] == "Delivered"
+    assert evidence["delivered_at"] is not None
+    assert evidence["delivered_at"].tzinfo is not None
+    assert evidence["delivery_latitude"] == 19.076
+    assert evidence["delivery_longitude"] == 72.8777
+    assert evidence["signature_obtained"] is True
+    assert evidence["delivery_photo_url"] == "https://example.test/pod/awb_variant_001.jpg"
+
+
+def test_shipping_agent_uses_delhivery_when_shiprocket_fails(monkeypatch) -> None:
+    monkeypatch.delenv("CHARGEGUARD_USE_STUBS", raising=False)
+    monkeypatch.setattr(
+        shipping,
+        "_collect_shiprocket",
+        lambda state: (_ for _ in ()).throw(RuntimeError("Shiprocket unavailable")),
+    )
+    monkeypatch.setattr(
+        shipping,
+        "_collect_delhivery",
+        lambda state: {
+            "tracking_id": state["tracking_id"],
+            "courier": "Delhivery",
+            "status": "DELIVERED",
+            "delivered_at": "2026-05-20T10:15:00Z",
+        },
+    )
+
+    result = shipping_agent(_state())
+
+    assert result["shipping"] is not None
+    assert result["shipping"]["courier"] == "Delhivery"
+    assert result["shipping"]["raw"]["source"] == "delhivery"
+
+
+def test_shipping_agent_records_empty_evidence_on_collection_failure(monkeypatch) -> None:
+    def fail_tracking_collection(state: ChargebackState) -> tuple[dict, str]:
+        raise RuntimeError("carrier unavailable")
+
+    monkeypatch.setattr(shipping, "_collect_shipping_data", fail_tracking_collection)
+
+    state = _state()
+    result = shipping_agent(state)
+
+    assert result["shipping"] is not None
+    assert result["shipping"]["status"] == "UNKNOWN"
+    assert result["shipping"]["signature_obtained"] is False
+    assert result["shipping"]["raw"]["source"] == "shipping_agent_empty"
+    assert result["shipping"]["raw"]["error"] == "carrier unavailable"
+    assert result["transaction"] is None

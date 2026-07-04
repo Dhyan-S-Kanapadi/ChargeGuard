@@ -6,6 +6,8 @@ class MerchantProfile(TypedDict):
     merchant_id: str
     name: str
     vertical: Literal["ecommerce", "food_delivery", "quick_commerce"]
+    payment_provider: NotRequired[Literal["razorpay", "stripe"]]
+    shipping_provider: NotRequired[Literal["shiprocket", "delhivery"]]
     razorpay_key: str
     shiprocket_key: str
     freshdesk_domain: str
@@ -58,6 +60,7 @@ class DeviceEvidence(TypedDict):
 
 
 class ConsortiumEvidence(TypedDict):
+    lookup_complete: bool
     ethoca_match: bool
     verifi_match: bool
     cross_merchant_fraud_history: bool
@@ -88,6 +91,8 @@ class ChargebackState(TypedDict):
     order_id: NotRequired[str]
     payment_id: NotRequired[str]
     tracking_id: NotRequired[str]
+    chargeback_received_at: NotRequired[datetime]
+    card_fingerprint: NotRequired[str]
     reason_code: str
     card_network: Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"]
     dispute_amount: float
