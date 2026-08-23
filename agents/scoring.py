@@ -10,6 +10,17 @@ from ml.model import WinProbabilityModel
 logger = logging.getLogger(__name__)
 
 
+def _decision_log_extra(state: ChargebackState) -> dict[str, object]:
+    return {
+        "chargeback_id": state["chargeback_id"],
+        "decision": state.get("decision"),
+        "win_probability": state.get("win_probability"),
+        "expected_value": state.get("expected_value"),
+        "dispute_amount": state["dispute_amount"],
+        "currency": state["currency"],
+    }
+
+
 def _float_env(name: str, default: float) -> float:
     value = os.getenv(name)
     if value is None:
@@ -69,4 +80,5 @@ def scoring_agent(state: ChargebackState) -> ChargebackState:
         f"expected value {expected_value:.2f} {state['currency']}; "
         f"threshold {fight_threshold:.2f}." + degradation_reason + expedited_reason
     )
+    logger.info("Chargeback decision calculated", extra=_decision_log_extra(state))
     return state
