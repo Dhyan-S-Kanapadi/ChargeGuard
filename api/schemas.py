@@ -10,8 +10,6 @@ class MerchantCreate(BaseModel):
     vertical: Literal["ecommerce", "food_delivery", "quick_commerce"]
     payment_provider: Literal["razorpay", "stripe"] | None = None
     shipping_provider: Literal["shiprocket", "delhivery"] | None = None
-    razorpay_key: str = ""
-    shiprocket_key: str = ""
     freshdesk_domain: str = ""
     average_order_value: float = Field(default=0, ge=0)
     chargeback_history_count: int = Field(default=0, ge=0)
