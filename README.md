@@ -30,7 +30,7 @@ Implemented:
 - In-memory dispute store for local development, with optional JSON persistence
 - LangGraph workflow with all core nodes wired
 - Orchestrator playbook routing
-- Transaction evidence with Razorpay, Stripe, Cashfree, PayU, and PhonePe support
+- Transaction evidence with Razorpay and Stripe support
 - Shipping evidence with Shiprocket and Delhivery support
 - Communications evidence with Freshdesk and Gmail reader support
 - Device evidence with SEON support
@@ -180,12 +180,6 @@ CHARGEGUARD_USE_STUBS=true
 
 This allows the evidence agents to run without live provider credentials.
 
-### Start Neo4j
-
-```bash
-docker compose up -d neo4j
-```
-
 ### Train Or Generate The Baseline Model
 
 The scoring agent expects a model artifact at:
@@ -311,9 +305,6 @@ Providers:
 | --- | --- |
 | `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | Razorpay payment evidence. |
 | `STRIPE_API_KEY` | Stripe payment evidence. |
-| `CASHFREE_CLIENT_ID` / `CASHFREE_CLIENT_SECRET` | Cashfree payment evidence. |
-| `PAYU_MERCHANT_KEY` / `PAYU_SALT` | PayU payment evidence. |
-| `PHONEPE_MERCHANT_ID` / `PHONEPE_SALT_KEY` / `PHONEPE_SALT_INDEX` | PhonePe payment evidence. |
 | `SHIPROCKET_EMAIL` / `SHIPROCKET_PASSWORD` | Shiprocket shipment evidence. |
 | `DELHIVERY_API_TOKEN` | Delhivery fallback shipment evidence. |
 | `FRESHDESK_API_KEY` / `FRESHDESK_DOMAIN` | Support ticket evidence. |
