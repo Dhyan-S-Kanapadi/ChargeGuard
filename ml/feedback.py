@@ -81,14 +81,34 @@ def _playbook_statistics(records: list[dict[str, Any]]) -> dict[str, Any]:
     return statistics
 
 
-def _retrain(records: list[dict[str, Any]]) -> Path:
-    rows, labels = generate_synthetic_dataset(count=200, seed=42)
+def _synthetic_count(real_record_count: int) -> tuple[int, int, int]:
+    seed_count = max(_int_env("SYNTHETIC_SEED_COUNT", 200), 0)
+    decay_per_record = max(_int_env("SYNTHETIC_DECAY_PER_REAL_RECORD", 4), 0)
+    return max(0, seed_count - (real_record_count * decay_per_record)), seed_count, decay_per_record
+
+
+def _retrain(records: list[dict[str, Any]]) -> tuple[Path, dict[str, int]]:
+    real_record_count = len(records)
+    synthetic_count, seed_count, decay_per_record = _synthetic_count(real_record_count)
+    logger.info(
+        "Retraining win model with %s real records and %s synthetic records",
+        real_record_count,
+        synthetic_count,
+    )
+    rows, labels = generate_synthetic_dataset(count=synthetic_count, seed=42)
     for record in records:
         features = record["features"]
         rows.append({name: features[name] for name in FEATURE_NAMES})
         labels.append(int(record["label"]))
     model = WinProbabilityModel(random_state=42).fit(rows, labels)
-    return model.save(os.getenv("MODEL_PATH", "./ml/artifacts/win_probability_model.pkl"))
+    metadata = {
+        "synthetic_seed_count": seed_count,
+        "synthetic_decay_per_real_record": decay_per_record,
+        "synthetic_record_count": synthetic_count,
+        "real_record_count": real_record_count,
+        "training_row_count": len(rows),
+    }
+    return model.save(os.getenv("MODEL_PATH", "./ml/artifacts/win_probability_model.pkl")), metadata
 
 
 def record_outcome(state: ChargebackState) -> dict[str, Any]:
@@ -127,12 +147,15 @@ def record_outcome(state: ChargebackState) -> dict[str, Any]:
         last_trained = int(metadata.get("last_trained_record_count", 0))
         retrained = len(records) - last_trained >= threshold
         artifact_path: str | None = None
+        training_split: dict[str, int] | None = None
         if retrained:
-            artifact_path = str(_retrain(records))
+            saved_path, training_split = _retrain(records)
+            artifact_path = str(saved_path)
             metadata = {
                 "last_trained_record_count": len(records),
                 "trained_at": datetime.now(timezone.utc).isoformat(),
                 "model_path": artifact_path,
+                "training_split": training_split,
             }
             _write_json(metadata_path, metadata)
 
@@ -141,4 +164,5 @@ def record_outcome(state: ChargebackState) -> dict[str, Any]:
         "record_count": len(records),
         "retrained": retrained,
         "model_path": artifact_path,
+        "training_split": training_split,
     }

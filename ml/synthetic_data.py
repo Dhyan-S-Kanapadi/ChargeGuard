@@ -66,8 +66,12 @@ def generate_synthetic_dataset(
     seed: int = 42,
 ) -> tuple[list[FeatureRow], list[int]]:
     """Generate deterministic development data; never treat it as production truth."""
-    if count < 2:
-        raise ValueError("count must be at least 2")
+    if count < 0:
+        raise ValueError("count must be non-negative")
+    if count == 0:
+        return [], []
+    if count == 1:
+        raise ValueError("count must be 0 or at least 2")
 
     rng = random.Random(seed)
     rows: list[FeatureRow] = []
