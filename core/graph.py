@@ -30,9 +30,17 @@ def route_food_evidence(state: ChargebackState) -> Literal["food", "standard"]:
     return "standard"
 
 
-def route_decision(state: ChargebackState) -> Literal["FIGHT", "ACCEPT"]:
+def route_priority(state: ChargebackState) -> Literal["full", "expedited"]:
+    if state.get("investigation_plan", {}).get("priority") == "overdue":
+        return "expedited"
+    return "full"
+
+
+def route_decision(state: ChargebackState) -> Literal["FIGHT", "ACCEPT", "ESCALATE_DEGRADED"]:
     if state.get("decision") == "FIGHT":
         return "FIGHT"
+    if state.get("decision") == "ESCALATE_DEGRADED":
+        return "ESCALATE_DEGRADED"
     return "ACCEPT"
 
 
@@ -56,6 +64,8 @@ def build_graph():
     graph.add_node("orchestrator", orchestrator_agent)
     graph.add_node("transaction_evidence", transaction_agent)
     graph.add_node("shipping_evidence", shipping_agent)
+    graph.add_node("expedited_transaction_evidence", transaction_agent)
+    graph.add_node("expedited_shipping_evidence", shipping_agent)
     graph.add_node("device_evidence", device_agent)
     graph.add_node("comms_evidence", comms_agent)
     graph.add_node("consortium_evidence", consortium_agent)
@@ -70,9 +80,18 @@ def build_graph():
     graph.add_node("human_escalation", human_escalation_agent)
 
     graph.set_entry_point("orchestrator")
-    graph.add_edge("orchestrator", "transaction_evidence")
+    graph.add_conditional_edges(
+        "orchestrator",
+        route_priority,
+        {
+            "full": "transaction_evidence",
+            "expedited": "expedited_transaction_evidence",
+        },
+    )
     graph.add_edge("transaction_evidence", "shipping_evidence")
     graph.add_edge("shipping_evidence", "device_evidence")
+    graph.add_edge("expedited_transaction_evidence", "expedited_shipping_evidence")
+    graph.add_edge("expedited_shipping_evidence", "scoring")
     graph.add_edge("device_evidence", "comms_evidence")
     graph.add_edge("comms_evidence", "consortium_evidence")
     graph.add_conditional_edges(
@@ -91,6 +110,7 @@ def build_graph():
         {
             "FIGHT": "rebuttal_builder",
             "ACCEPT": "accept_and_log",
+            "ESCALATE_DEGRADED": "human_escalation",
         },
     )
     graph.add_conditional_edges(

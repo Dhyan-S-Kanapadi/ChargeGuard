@@ -97,7 +97,7 @@ def test_device_builder_accepts_provider_payload_variants() -> None:
     assert evidence["vpn_detected"] is True
 
 
-def test_device_agent_records_conservative_evidence_on_collection_failure(monkeypatch) -> None:
+def test_device_agent_marks_collection_failure_as_degraded(monkeypatch) -> None:
     def fail_device_collection(state: ChargebackState) -> tuple[dict, str]:
         raise RuntimeError("seon unavailable")
 
@@ -106,13 +106,9 @@ def test_device_agent_records_conservative_evidence_on_collection_failure(monkey
     state = _state()
     result = device_agent(state)
 
-    assert result["device"] is not None
-    assert result["device"]["fraud_score"] == 100.0
-    assert result["device"]["geolocation_match"] is False
-    assert result["device"]["login_pattern_normal"] is False
-    assert result["device"]["vpn_detected"] is True
-    assert result["device"]["raw"]["source"] == "device_agent_empty"
-    assert result["device"]["raw"]["error"] == "seon unavailable"
+    assert result["device"] is None
+    assert result["evidence_collection_degraded"] is True
+    assert result["degraded_reasons"] == ["device"]
 
 
 def test_device_agent_collects_and_normalizes_seon(monkeypatch) -> None:

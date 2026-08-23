@@ -8,8 +8,7 @@ class MerchantProfile(TypedDict):
     vertical: Literal["ecommerce", "food_delivery", "quick_commerce"]
     payment_provider: NotRequired[Literal["razorpay", "stripe"]]
     shipping_provider: NotRequired[Literal["shiprocket", "delhivery"]]
-    razorpay_key: str
-    shiprocket_key: str
+    # TODO: FreshdeskClient still uses FRESHDESK_DOMAIN; this is informational until it supports per-merchant domains.
     freshdesk_domain: str
     average_order_value: float
     chargeback_history_count: int
@@ -112,11 +111,13 @@ class ChargebackState(TypedDict):
     consortium: Optional[ConsortiumEvidence]
     delivery_photo: Optional[DeliveryPhotoEvidence]
     order_timeline: Optional[OrderTimelineEvidence]
+    evidence_collection_degraded: bool
+    degraded_reasons: list[str]
 
     # Intelligence
     win_probability: Optional[float]
     expected_value: Optional[float]
-    decision: Optional[Literal["FIGHT", "ACCEPT"]]
+    decision: Optional[Literal["FIGHT", "ACCEPT", "ESCALATE_DEGRADED"]]
     decision_reasoning: Optional[str]
 
     # Response

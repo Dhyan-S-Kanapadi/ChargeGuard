@@ -48,14 +48,25 @@ def scoring_agent(state: ChargebackState) -> ChargebackState:
     response_cost = convert_currency(response_cost, "USD", state["currency"])
     fight_threshold = _float_env("FIGHT_EV_THRESHOLD", 0.0)
     expected_value = round((win_probability * state["dispute_amount"]) - response_cost, 2)
-    decision = "FIGHT" if expected_value > fight_threshold else "ACCEPT"
+    is_degraded = state.get("evidence_collection_degraded", False)
+    model_failed = model_source != "logistic_regression"
+    if is_degraded or model_failed:
+        decision = "ESCALATE_DEGRADED"
+    else:
+        decision = "FIGHT" if expected_value > fight_threshold else "ACCEPT"
 
     state["win_probability"] = win_probability
     state["expected_value"] = expected_value
     state["decision"] = decision
+    degradation_reason = " Evidence or model availability is degraded; human review required." if (
+        is_degraded or model_failed
+    ) else ""
+    expedited_reason = " Expedited partial-evidence decision due to overdue filing deadline." if (
+        state.get("investigation_plan", {}).get("priority") == "overdue"
+    ) else ""
     state["decision_reasoning"] = (
         f"Model {model_source}; win probability {win_probability:.1%}; "
         f"expected value {expected_value:.2f} {state['currency']}; "
-        f"threshold {fight_threshold:.2f}."
+        f"threshold {fight_threshold:.2f}." + degradation_reason + expedited_reason
     )
     return state

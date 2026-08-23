@@ -26,26 +26,6 @@ def _transaction_context(state: ChargebackState) -> dict[str, Any]:
     }
 
 
-def _empty_device_evidence(
-    state: ChargebackState,
-    *,
-    error: str | None = None,
-) -> DeviceEvidence:
-    context = _transaction_context(state)
-    return {
-        "fraud_score": 100.0,
-        "device_fingerprint": str(context["device_id"]),
-        "geolocation_match": False,
-        "login_pattern_normal": False,
-        "vpn_detected": True,
-        "raw": {
-            "source": "device_agent_empty",
-            "error": error,
-            "ip_address": context["ip_address"],
-        },
-    }
-
-
 def _stub_device_risk_response(state: ChargebackState) -> dict[str, Any]:
     context = _transaction_context(state)
     return {
@@ -189,6 +169,10 @@ def device_agent(state: ChargebackState) -> ChargebackState:
         risk, source = _collect_device_data(state)
         state["device"] = _build_device_evidence(risk, state=state, source=source)
     except Exception as exc:
-        logger.exception("Device evidence collection failed")
-        state["device"] = _empty_device_evidence(state, error=str(exc))
+        logger.exception("Device evidence collection failed: %s", exc)
+        state["device"] = None
+        state["evidence_collection_degraded"] = True
+        degraded_reasons = state.setdefault("degraded_reasons", [])
+        if "device" not in degraded_reasons:
+            degraded_reasons.append("device")
     return state
