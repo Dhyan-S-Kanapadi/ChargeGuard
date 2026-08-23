@@ -41,8 +41,6 @@ def _merchant_payload() -> dict:
         "vertical": "ecommerce",
         "payment_provider": "razorpay",
         "shipping_provider": "shiprocket",
-        "razorpay_key": "secret_key_not_returned",
-        "shiprocket_key": "secret_shipping_key_not_returned",
         "freshdesk_domain": "demo.freshdesk.com",
         "average_order_value": 1800.0,
         "chargeback_history_count": 4,
@@ -63,6 +61,14 @@ def _webhook_payload() -> dict:
         "tracking_id": "tracking_api_001",
         "card_fingerprint": "card_fingerprint_001",
     }
+
+
+def _contains_key(value, blocked_key: str) -> bool:
+    if isinstance(value, dict):
+        return blocked_key in value or any(_contains_key(item, blocked_key) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_key(item, blocked_key) for item in value)
+    return False
 
 
 def test_webhook_runs_graph_and_exposes_completed_dispute(configured_client: TestClient) -> None:
@@ -98,6 +104,48 @@ def test_webhook_runs_graph_and_exposes_completed_dispute(configured_client: Tes
     assert list_response.status_code == 200
     assert list_response.json()[0]["chargeback_id"] == "cb_api_001"
     assert list_response.json()[0]["currency"] == "INR"
+
+
+def test_dispute_detail_redacts_raw_payloads_and_transaction_pii(
+    configured_client: TestClient,
+) -> None:
+    assert configured_client.post("/merchants", json=_merchant_payload()).status_code == 201
+    assert configured_client.post("/webhook/chargeback", json=_webhook_payload()).status_code == 202
+
+    detail_response = configured_client.get("/disputes/cb_api_001")
+
+    assert detail_response.status_code == 200
+    payload = detail_response.json()
+    transaction = payload["state"]["transaction"]
+    assert transaction is not None
+    assert "customer_email" not in transaction
+    assert "ip_address" not in transaction
+    assert "device_id" not in transaction
+    assert not _contains_key(payload, "raw")
+
+
+def test_dispute_detail_allows_raw_payloads_with_internal_token(
+    configured_client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("INTERNAL_API_TOKEN", "debug-token")
+    assert configured_client.post("/merchants", json=_merchant_payload()).status_code == 201
+    assert configured_client.post("/webhook/chargeback", json=_webhook_payload()).status_code == 202
+
+    forbidden = configured_client.get("/disputes/cb_api_001?include_raw=true")
+    detail_response = configured_client.get(
+        "/disputes/cb_api_001?include_raw=true",
+        headers={"X-Internal-Token": "debug-token"},
+    )
+
+    assert forbidden.status_code == 403
+    assert detail_response.status_code == 200
+    payload = detail_response.json()
+    transaction = payload["state"]["transaction"]
+    assert transaction["customer_email"]
+    assert transaction["ip_address"]
+    assert transaction["device_id"]
+    assert _contains_key(payload, "raw")
 
 
 def test_webhook_rejects_unknown_merchant(client: TestClient) -> None:
@@ -151,3 +199,38 @@ def test_outcome_endpoint_records_terminal_feedback(
     )
     assert duplicate.status_code == 409
     assert duplicate.json()["detail"] == "Final outcome already recorded."
+
+
+def test_outcome_endpoint_rejects_accept_path_disputes(
+    configured_client: TestClient,
+    tmp_path,
+) -> None:
+    assert configured_client.post("/merchants", json=_merchant_payload()).status_code == 201
+    payload = _webhook_payload()
+    payload["chargeback_id"] = "cb_api_accept_001"
+    payload["dispute_amount"] = 10.0
+    payload["currency"] = "USD"
+
+    response = configured_client.post("/webhook/chargeback", json=payload)
+    assert response.status_code == 202
+
+    detail = configured_client.get("/disputes/cb_api_accept_001").json()
+    if detail["state"]["decision"] != "ACCEPT":
+        # Force the API guard directly if the trained model fights this fixture.
+        state = detail["state"]
+        state["decision"] = "ACCEPT"
+        state["quality_approved"] = False
+        state["filing_confirmation"] = "accepted_no_filing"
+        state["filed_at"] = None
+        state["final_outcome"] = "ACCEPTED_NO_CONTEST"
+        store.update_dispute("cb_api_accept_001", status="completed", state=state)
+
+    outcome_response = configured_client.post(
+        "/disputes/cb_api_accept_001/outcome",
+        json={"outcome": "WIN"},
+    )
+
+    assert outcome_response.status_code == 409
+    assert outcome_response.json()["detail"] == (
+        "Only filed representment disputes can record adjudicated outcomes."
+    )

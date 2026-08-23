@@ -1,18 +1,59 @@
-from fastapi import APIRouter, HTTPException
+from copy import deepcopy
+import os
+from typing import Any
+
+from fastapi import APIRouter, Header, HTTPException, Query
 
 from agents.learning import learning_agent
 from api.schemas import DisputeDetail, DisputeSummary, OutcomeResponse, OutcomeUpdate
 from api.store import store
+from core.state import is_filed_dispute
 
 
 router = APIRouter(prefix="/disputes", tags=["disputes"])
+
+
+_EVIDENCE_KEYS = (
+    "transaction",
+    "shipping",
+    "comms",
+    "device",
+    "consortium",
+    "delivery_photo",
+    "order_timeline",
+)
+_TRANSACTION_PII_KEYS = ("customer_email", "ip_address", "device_id")
+
+
+def _redact_state(state: dict[str, Any]) -> dict[str, Any]:
+    redacted = deepcopy(state)
+    for key in _EVIDENCE_KEYS:
+        evidence = redacted.get(key)
+        if isinstance(evidence, dict):
+            evidence.pop("raw", None)
+
+    transaction = redacted.get("transaction")
+    if isinstance(transaction, dict):
+        for key in _TRANSACTION_PII_KEYS:
+            transaction.pop(key, None)
+
+    return redacted
+
+
+def _authorize_raw_access(include_raw: bool, internal_token: str | None) -> None:
+    if not include_raw:
+        return
+
+    expected_token = os.getenv("INTERNAL_API_TOKEN")
+    if not expected_token or internal_token != expected_token:
+        raise HTTPException(status_code=403, detail="Internal token required.")
 
 
 @router.get("", response_model=list[DisputeSummary])
 def list_disputes() -> list[DisputeSummary]:
     summaries: list[DisputeSummary] = []
     for record in store.list_disputes():
-        state = record["state"]
+        state = _redact_state(record["state"])
         summaries.append(
             DisputeSummary(
                 chargeback_id=record["chargeback_id"],
@@ -29,10 +70,17 @@ def list_disputes() -> list[DisputeSummary]:
 
 
 @router.get("/{chargeback_id}", response_model=DisputeDetail)
-def get_dispute(chargeback_id: str) -> DisputeDetail:
+def get_dispute(
+    chargeback_id: str,
+    include_raw: bool = Query(default=False),
+    x_internal_token: str | None = Header(default=None, alias="X-Internal-Token"),
+) -> DisputeDetail:
+    _authorize_raw_access(include_raw, x_internal_token)
     record = store.get_dispute(chargeback_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Dispute not found.")
+    if not include_raw:
+        record["state"] = _redact_state(record["state"])
     return DisputeDetail(**record)
 
 
@@ -50,6 +98,11 @@ def record_dispute_outcome(
     state = record["state"]
     if state.get("final_outcome") in {"WIN", "LOSS"}:
         raise HTTPException(status_code=409, detail="Final outcome already recorded.")
+    if not is_filed_dispute(state):
+        raise HTTPException(
+            status_code=409,
+            detail="Only filed representment disputes can record adjudicated outcomes.",
+        )
     state["final_outcome"] = payload.outcome
     state["outcome_reason"] = payload.reason
     state = learning_agent(state)
