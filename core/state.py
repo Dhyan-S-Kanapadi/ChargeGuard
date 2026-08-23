@@ -128,6 +128,15 @@ class ChargebackState(TypedDict):
     filed_at: Optional[datetime]
 
     # Learning
-    final_outcome: Optional[Literal["WIN", "LOSS", "PENDING"]]
+    final_outcome: Optional[Literal["WIN", "LOSS", "PENDING", "ACCEPTED_NO_CONTEST"]]
     outcome_reason: Optional[str]
     outcome_recorded_at: Optional[datetime]
+
+
+def is_filed_dispute(state: ChargebackState) -> bool:
+    return (
+        state.get("decision") == "FIGHT"
+        and bool(state.get("quality_approved"))
+        and state.get("filed_at") is not None
+        and str(state.get("filing_confirmation") or "").startswith("filed_")
+    )

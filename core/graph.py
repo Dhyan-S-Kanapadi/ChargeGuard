@@ -18,7 +18,7 @@ from agents.orchestrator import orchestrator_agent
 from agents.quality_check import quality_check_agent
 from agents.rebuttal_builder import rebuttal_builder_agent
 from agents.scoring import scoring_agent
-from core.state import ChargebackState
+from core.state import ChargebackState, is_filed_dispute
 
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def route_quality(state: ChargebackState) -> Literal["approved", "retry", "escal
 
 
 def route_learning(state: ChargebackState) -> Literal["learn", "end"]:
-    if state.get("final_outcome") in {"WIN", "LOSS"}:
+    if state.get("final_outcome") in {"WIN", "LOSS"} and is_filed_dispute(state):
         return "learn"
     return "end"
 

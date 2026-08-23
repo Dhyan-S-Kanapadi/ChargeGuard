@@ -1,17 +1,19 @@
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from core.state import ChargebackState
+from core.state import ChargebackState, is_filed_dispute
 from ml.features import FEATURE_NAMES, features_from_state
 from ml.model import WinProbabilityModel
 from ml.synthetic_data import generate_synthetic_dataset
 
 
 _LOCK = RLock()
+logger = logging.getLogger(__name__)
 
 
 def _path(env_name: str, default: str) -> Path:
@@ -34,10 +36,24 @@ def _write_json(path: Path, value: Any) -> None:
     temporary.replace(path)
 
 
+def _int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Invalid %s=%r, using default %s", name, value, default)
+        return default
+
+
 def _feedback_record(state: ChargebackState) -> dict[str, Any]:
     outcome = state.get("final_outcome")
     if outcome not in {"WIN", "LOSS"}:
         raise ValueError("feedback requires a terminal WIN or LOSS outcome")
+    if not is_filed_dispute(state):
+        raise ValueError("feedback requires a filed representment case")
     return {
         "chargeback_id": state["chargeback_id"],
         "card_network": state["card_network"],

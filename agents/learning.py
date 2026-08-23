@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
-from core.state import ChargebackState
+from core.state import ChargebackState, is_filed_dispute
 from ml.feedback import record_outcome
 
 
@@ -23,6 +23,9 @@ def learning_agent(state: ChargebackState) -> ChargebackState:
 
     if state.get("final_outcome") not in {"WIN", "LOSS"}:
         logger.info("Skipping learning for non-terminal chargeback %s", state["chargeback_id"])
+        return state
+    if not is_filed_dispute(state):
+        logger.info("Skipping learning for unfiled chargeback %s", state["chargeback_id"])
         return state
     if state.get("outcome_reason") is None:
         state["outcome_reason"] = _default_outcome_reason(state)

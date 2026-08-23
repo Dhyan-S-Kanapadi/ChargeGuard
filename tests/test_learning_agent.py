@@ -59,6 +59,19 @@ def test_learning_agent_skips_unknown_outcome() -> None:
     assert result["outcome_recorded_at"] is None
 
 
+def test_learning_agent_skips_unfiled_loss() -> None:
+    state = _state()
+    state["filing_confirmation"] = "accepted_no_filing"
+    state["filed_at"] = None
+    state["final_outcome"] = "LOSS"
+
+    result = learning_agent(state)
+
+    assert result["final_outcome"] == "LOSS"
+    assert result["outcome_reason"] is None
+    assert result["outcome_recorded_at"] is None
+
+
 def _configure_learning(monkeypatch, tmp_path, *, threshold: int = 10) -> None:
     monkeypatch.setenv("TRAINING_DATA_PATH", str(tmp_path / "outcomes.json"))
     monkeypatch.setenv("TRAINING_METADATA_PATH", str(tmp_path / "metadata.json"))

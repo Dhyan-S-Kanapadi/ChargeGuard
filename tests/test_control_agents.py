@@ -52,12 +52,12 @@ def _state() -> ChargebackState:
     }
 
 
-def test_accept_and_log_agent_records_no_filing_loss() -> None:
+def test_accept_and_log_agent_records_no_contest_acceptance() -> None:
     result = accept_and_log_agent(_state())
 
     assert result["decision"] == "ACCEPT"
     assert result["filing_confirmation"] == "accepted_no_filing"
-    assert result["final_outcome"] == "LOSS"
+    assert result["final_outcome"] == "ACCEPTED_NO_CONTEST"
     assert result["outcome_reason"] == "Chargeback accepted because representment was not economically justified."
 
 

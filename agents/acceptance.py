@@ -12,7 +12,7 @@ def accept_and_log_agent(state: ChargebackState) -> ChargebackState:
 
     state["decision"] = "ACCEPT"
     state["filing_confirmation"] = "accepted_no_filing"
-    state["final_outcome"] = "LOSS"
+    state["final_outcome"] = "ACCEPTED_NO_CONTEST"
     if state.get("outcome_reason") is None:
         state["outcome_reason"] = "Chargeback accepted because representment was not economically justified."
     return state
