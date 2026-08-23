@@ -90,6 +90,21 @@ def test_api_key_is_required(monkeypatch) -> None:
     assert authenticated_response.status_code == 200
 
 
+def test_stats_returns_live_dispute_aggregates(configured_client: TestClient) -> None:
+    assert configured_client.post("/merchants", json=_merchant_payload()).status_code == 201
+    assert configured_client.post("/webhook/chargeback", json=_webhook_payload()).status_code == 202
+
+    response = configured_client.get("/stats")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_disputes_processed"] == 1
+    assert set(payload["decisions"]) == {"FIGHT", "ACCEPT", "ESCALATE_DEGRADED"}
+    assert "win_rate" in payload
+    assert "average_expected_value" in payload
+    assert "evidence_collection_degraded_count" in payload
+
+
 def test_webhook_runs_graph_and_exposes_completed_dispute(configured_client: TestClient) -> None:
     merchant_response = configured_client.post("/merchants", json=_merchant_payload())
 
