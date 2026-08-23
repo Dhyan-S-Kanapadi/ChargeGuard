@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from agents.orchestrator import _build_investigation_plan, orchestrator_agent
+from core.graph import route_priority
 from core.state import ChargebackState
 
 
@@ -87,3 +88,12 @@ def test_investigation_plan_assigns_deadline_priority() -> None:
 
     assert plan["days_until_deadline"] == 2
     assert plan["priority"] == "urgent"
+
+
+def test_overdue_plan_uses_expedited_route() -> None:
+    state = _state()
+    now = datetime(2026, 5, 12, tzinfo=timezone.utc)
+    state["filing_deadline"] = now - timedelta(days=1)
+    state["investigation_plan"] = _build_investigation_plan(state, now=now)
+
+    assert route_priority(state) == "expedited"
