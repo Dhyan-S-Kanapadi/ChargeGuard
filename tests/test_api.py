@@ -90,6 +90,22 @@ def test_api_key_is_required(monkeypatch) -> None:
     assert authenticated_response.status_code == 200
 
 
+def test_health_reports_model_and_stub_mode(tmp_path, monkeypatch) -> None:
+    model_path = tmp_path / "model.pkl"
+    train_baseline_model(output_path=model_path, count=200, seed=42)
+    monkeypatch.setenv("MODEL_PATH", str(model_path))
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
+
+    response = TestClient(app).get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "model_loaded": True,
+        "stub_mode": True,
+    }
+
+
 def test_stats_returns_live_dispute_aggregates(configured_client: TestClient) -> None:
     assert configured_client.post("/merchants", json=_merchant_payload()).status_code == 201
     assert configured_client.post("/webhook/chargeback", json=_webhook_payload()).status_code == 202

@@ -1,9 +1,13 @@
+import os
+from pathlib import Path
+
 from fastapi import FastAPI
 
 from api.disputes import router as disputes_router
 from api.merchants import router as merchants_router
 from api.stats import router as stats_router
 from api.webhooks import router as webhooks_router
+from ml.model import WinProbabilityModel
 
 
 app = FastAPI(title="ChargeGuard AI", version="0.1.0")
@@ -13,6 +17,26 @@ app.include_router(merchants_router)
 app.include_router(stats_router)
 
 
+def _model_loaded() -> bool:
+    artifact_path = Path(os.getenv("MODEL_PATH", "./ml/artifacts/win_probability_model.pkl"))
+    if not artifact_path.is_file():
+        return False
+    try:
+        WinProbabilityModel.load(artifact_path)
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _stub_mode() -> bool:
+    return os.getenv("CHARGEGUARD_USE_STUBS", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, str | bool]:
+    model_loaded = _model_loaded()
+    return {
+        "status": "ok" if model_loaded else "degraded",
+        "model_loaded": model_loaded,
+        "stub_mode": _stub_mode(),
+    }
