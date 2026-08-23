@@ -1,5 +1,6 @@
 from typing import Final
 
+from core.currency import convert_currency
 from core.state import ChargebackState
 
 
@@ -40,13 +41,14 @@ _REASON_CODE_ENCODINGS: Final = {
 }
 
 
-def bucket_amount(amount: float) -> int:
-    """Bucket dispute value using merchant-friendly INR ranges."""
-    if amount < 1_000:
+def bucket_amount(amount: float, currency: str = "USD") -> int:
+    """Bucket dispute value using normalized USD ranges."""
+    amount_usd = convert_currency(amount, currency, "USD")
+    if amount_usd < 1_000:
         return 0
-    if amount < 5_000:
+    if amount_usd < 5_000:
         return 1
-    if amount < 10_000:
+    if amount_usd < 10_000:
         return 2
     return 3
 
@@ -88,7 +90,10 @@ def features_from_state(state: ChargebackState) -> dict[str, float | int]:
         "cross_merchant_fraud": int(bool(consortium.get("cross_merchant_fraud_history"))),
         "post_delivery_contact": int(bool(comms.get("post_delivery_interaction"))),
         "pre_chargeback_complaint": int(bool(comms.get("complaint_raised_before_chargeback"))),
-        "dispute_amount_bucket": bucket_amount(float(state["dispute_amount"])),
+        "dispute_amount_bucket": bucket_amount(
+            float(state["dispute_amount"]),
+            state["currency"],
+        ),
         "card_network_encoded": encode_network(state["card_network"]),
         "reason_code_encoded": encode_reason_code(state["reason_code"]),
     }

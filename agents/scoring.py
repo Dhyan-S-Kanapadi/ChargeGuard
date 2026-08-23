@@ -2,6 +2,7 @@ import logging
 import os
 from pathlib import Path
 
+from core.currency import convert_currency
 from core.state import ChargebackState
 from ml.model import WinProbabilityModel
 
@@ -44,6 +45,7 @@ def scoring_agent(state: ChargebackState) -> ChargebackState:
 
     win_probability, model_source = _predict_win_probability(state)
     response_cost = _float_env("RESPONSE_COST_USD", 15.0)
+    response_cost = convert_currency(response_cost, "USD", state["currency"])
     fight_threshold = _float_env("FIGHT_EV_THRESHOLD", 0.0)
     expected_value = round((win_probability * state["dispute_amount"]) - response_cost, 2)
     decision = "FIGHT" if expected_value > fight_threshold else "ACCEPT"

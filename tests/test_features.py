@@ -74,3 +74,30 @@ def test_amount_buckets_are_stable() -> None:
     assert bucket_amount(1000) == 1
     assert bucket_amount(5000) == 2
     assert bucket_amount(10000) == 3
+
+
+def test_amount_buckets_normalize_currency(monkeypatch) -> None:
+    monkeypatch.setenv("RESPONSE_COST_FX_RATES", "USD:1,INR:83")
+
+    assert bucket_amount(1000, "USD") == bucket_amount(83_000, "INR")
+
+    usd_state = {
+        "chargeback_id": "cb_features_usd",
+        "reason_code": "10.4",
+        "card_network": "VISA",
+        "dispute_amount": 1000.0,
+        "currency": "USD",
+        "filing_deadline": datetime(2026, 7, 1, tzinfo=timezone.utc),
+        "merchant_profile": {},
+    }
+    inr_state = {
+        **usd_state,
+        "chargeback_id": "cb_features_inr",
+        "dispute_amount": 83_000.0,
+        "currency": "INR",
+    }
+
+    assert (
+        features_from_state(usd_state)["dispute_amount_bucket"]
+        == features_from_state(inr_state)["dispute_amount_bucket"]
+    )
