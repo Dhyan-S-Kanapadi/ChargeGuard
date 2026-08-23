@@ -26,6 +26,7 @@ dist/
 # Generated outputs
 output/
 ml/artifacts/
+data/
 
 # Editor and OS files
 .idea/

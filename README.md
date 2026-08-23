@@ -27,7 +27,7 @@ Implemented:
 - FastAPI application entrypoint and health check
 - Merchant registration and retrieval endpoints
 - Chargeback webhook endpoint
-- In-memory dispute store for local development
+- In-memory dispute store for local development, with optional JSON persistence
 - LangGraph workflow with all core nodes wired
 - Orchestrator playbook routing
 - Transaction evidence with Razorpay, Stripe, Cashfree, PayU, and PhonePe support
@@ -51,7 +51,7 @@ Not yet production-ready:
 
 - Card-network portal submission is still a local stub.
 - Food and quick-commerce platform integrations are currently stub-first.
-- The API store is in-memory; production needs durable persistence.
+- JSON API persistence is available for local durability; production still needs database-backed storage.
 - Provider credentials and merchant configuration need secure storage.
 - Live provider API behavior still depends on merchant-specific contracts and sandbox access.
 
@@ -287,6 +287,7 @@ Core:
 | Variable | Purpose |
 | --- | --- |
 | `CHARGEGUARD_USE_STUBS` | Uses deterministic stub evidence when `true`. |
+| `CHARGEGUARD_STORE_PATH` | Optional JSON file path for local merchant and dispute persistence. |
 | `ANTHROPIC_API_KEY` | Claude API key for rebuttal and vision tasks. |
 | `LANGSMITH_API_KEY` | LangSmith tracing key. |
 | `LANGSMITH_PROJECT` | LangSmith project name. |
@@ -385,7 +386,7 @@ These generated outputs should not be committed unless intentionally adding a fi
 
 Near-term:
 
-- Replace in-memory API store with persistent storage.
+- Replace local JSON API persistence with database-backed production storage.
 - Complete live food and quick-commerce platform integrations.
 - Add Claude Vision verification for delivery photos.
 - Add authenticated merchant configuration management.
