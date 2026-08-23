@@ -1,11 +1,16 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
+from api.auth import require_api_key
 from api.schemas import MerchantCreate, MerchantResponse
 from api.store import store
 from core.state import MerchantProfile
 
 
-router = APIRouter(prefix="/merchants", tags=["merchants"])
+router = APIRouter(
+    prefix="/merchants",
+    tags=["merchants"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 def _response(profile: MerchantProfile) -> MerchantResponse:

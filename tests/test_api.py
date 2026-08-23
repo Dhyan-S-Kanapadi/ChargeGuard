@@ -15,9 +15,10 @@ def clear_store() -> None:
     store.clear()
 
 
-@pytest.fixture(scope="module")
-def client() -> TestClient:
-    return TestClient(app)
+@pytest.fixture
+def client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("API_KEY", "test-api-key")
+    return TestClient(app, headers={"X-API-Key": "test-api-key"})
 
 
 @pytest.fixture
@@ -69,6 +70,21 @@ def _contains_key(value, blocked_key: str) -> bool:
     if isinstance(value, list):
         return any(_contains_key(item, blocked_key) for item in value)
     return False
+
+
+def test_api_key_is_required(monkeypatch) -> None:
+    monkeypatch.setenv("API_KEY", "test-api-key")
+    unauthenticated_client = TestClient(app)
+
+    response = unauthenticated_client.get("/disputes")
+    authenticated_response = unauthenticated_client.get(
+        "/disputes",
+        headers={"X-API-Key": "test-api-key"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Missing or invalid API key."
+    assert authenticated_response.status_code == 200
 
 
 def test_webhook_runs_graph_and_exposes_completed_dispute(configured_client: TestClient) -> None:

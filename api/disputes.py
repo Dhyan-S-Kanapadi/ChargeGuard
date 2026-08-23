@@ -2,15 +2,20 @@ from copy import deepcopy
 import os
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from agents.learning import learning_agent
+from api.auth import require_api_key
 from api.schemas import DisputeDetail, DisputeSummary, OutcomeResponse, OutcomeUpdate
 from api.store import store
 from core.state import is_filed_dispute
 
 
-router = APIRouter(prefix="/disputes", tags=["disputes"])
+router = APIRouter(
+    prefix="/disputes",
+    tags=["disputes"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 _EVIDENCE_KEYS = (

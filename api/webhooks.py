@@ -1,8 +1,9 @@
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
+from api.auth import require_api_key
 from api.schemas import ChargebackWebhookPayload, WebhookAccepted
 from api.store import store
 from core.graph import app as chargeback_graph
@@ -10,7 +11,11 @@ from core.state import ChargebackState
 
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/webhook", tags=["webhooks"])
+router = APIRouter(
+    prefix="/webhook",
+    tags=["webhooks"],
+    dependencies=[Depends(require_api_key)],
+)
 
 
 def run_chargeback_graph(state: ChargebackState) -> None:
