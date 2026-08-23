@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.store import store
+from api.webhooks import reset_webhook_rate_limiter
 from main import app
 from ml.train import train_baseline_model
 
@@ -11,8 +12,10 @@ from ml.train import train_baseline_model
 @pytest.fixture(autouse=True)
 def clear_store() -> None:
     store.clear()
+    reset_webhook_rate_limiter()
     yield
     store.clear()
+    reset_webhook_rate_limiter()
 
 
 @pytest.fixture
@@ -179,6 +182,22 @@ def test_webhook_rejects_duplicate_chargeback(configured_client: TestClient) -> 
 
     assert duplicate.status_code == 409
     assert duplicate.json()["detail"] == "Chargeback already exists."
+
+
+def test_webhook_rate_limit_rejects_thirty_first_request(
+    client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("WEBHOOK_RATE_LIMIT_PER_MINUTE", "30")
+
+    for _ in range(30):
+        response = client.post("/webhook/chargeback", json=_webhook_payload())
+        assert response.status_code == 404
+
+    limited = client.post("/webhook/chargeback", json=_webhook_payload())
+
+    assert limited.status_code == 429
+    assert limited.headers["Retry-After"]
 
 
 def test_webhook_rejects_past_deadline(client: TestClient) -> None:
