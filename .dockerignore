@@ -1,0 +1,12 @@
+.git
+.github
+.pytest_cache
+__pycache__
+*.py[cod]
+.venv
+ml/artifacts
+output
+data
+tests
+pytest-tmp*
+.env
