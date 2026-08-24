@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from api.store import store
-from api.webhooks import reset_webhook_rate_limiter
+from api.webhooks import enforce_webhook_rate_limit, reset_webhook_rate_limiter
 from main import app
 from ml.train import train_baseline_model
 
@@ -109,12 +110,15 @@ def test_health_reports_model_and_stub_mode(tmp_path, monkeypatch) -> None:
 def test_stats_returns_live_dispute_aggregates(configured_client: TestClient) -> None:
     assert configured_client.post("/merchants", json=_merchant_payload()).status_code == 201
     assert configured_client.post("/webhook/chargeback", json=_webhook_payload()).status_code == 202
+    second_payload = _webhook_payload()
+    second_payload["chargeback_id"] = "cb_api_002"
+    assert configured_client.post("/webhook/chargeback", json=second_payload).status_code == 202
 
     response = configured_client.get("/stats")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["total_disputes_processed"] == 1
+    assert payload["total_disputes_processed"] == 2
     assert set(payload["decisions"]) == {"FIGHT", "ACCEPT", "ESCALATE_DEGRADED"}
     assert "win_rate" in payload
     assert "average_expected_value" in payload
@@ -215,20 +219,17 @@ def test_webhook_rejects_duplicate_chargeback(configured_client: TestClient) -> 
     assert duplicate.json()["detail"] == "Chargeback already exists."
 
 
-def test_webhook_rate_limit_rejects_thirty_first_request(
-    client: TestClient,
-    monkeypatch,
-) -> None:
+def test_webhook_rate_limit_rejects_thirty_first_request(monkeypatch) -> None:
     monkeypatch.setenv("WEBHOOK_RATE_LIMIT_PER_MINUTE", "30")
 
     for _ in range(30):
-        response = client.post("/webhook/chargeback", json=_webhook_payload())
-        assert response.status_code == 404
+        enforce_webhook_rate_limit("test-api-key")
 
-    limited = client.post("/webhook/chargeback", json=_webhook_payload())
+    with pytest.raises(HTTPException) as raised:
+        enforce_webhook_rate_limit("test-api-key")
 
-    assert limited.status_code == 429
-    assert limited.headers["Retry-After"]
+    assert raised.value.status_code == 429
+    assert raised.value.headers["Retry-After"]
 
 
 def test_webhook_rejects_past_deadline(client: TestClient) -> None:

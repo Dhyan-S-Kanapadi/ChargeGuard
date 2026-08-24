@@ -394,7 +394,7 @@ Model roadmap:
 - Dispute storage is in-memory by default and does not survive restarts unless optional local JSON persistence is configured.
 - The filing layer is a local stub and is not connected to real card-network APIs.
 - The win-probability model is seeded with synthetic data that decays out as real WIN/LOSS outcomes accumulate.
-- API endpoints do not yet require authentication.
+- API authentication currently uses a shared environment-configured API key rather than per-merchant identity and authorization.
 
 ## License
 
