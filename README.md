@@ -30,7 +30,7 @@ Implemented:
 - In-memory dispute store for local development, with optional JSON persistence
 - LangGraph workflow with all core nodes wired
 - Orchestrator playbook routing
-- Transaction evidence with Razorpay and Stripe support (adapter pattern designed to extend to additional gateways)
+- Razorpay and Stripe support (adapter pattern designed to extend to additional gateways)
 - Shipping evidence with Shiprocket and Delhivery support
 - Communications evidence with Freshdesk and Gmail reader support
 - Device evidence with SEON support
