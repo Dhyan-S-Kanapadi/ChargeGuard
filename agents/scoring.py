@@ -52,8 +52,6 @@ def _predict_win_probability(state: ChargebackState) -> tuple[float, str]:
 
 def scoring_agent(state: ChargebackState) -> ChargebackState:
     """Predict win probability and apply the deterministic EV decision rule."""
-    logger.info("Running scoring agent for %s", state["chargeback_id"])
-
     win_probability, model_source = _predict_win_probability(state)
     response_cost = _float_env("RESPONSE_COST_USD", 15.0)
     response_cost = convert_currency(response_cost, "USD", state["currency"])
@@ -80,5 +78,9 @@ def scoring_agent(state: ChargebackState) -> ChargebackState:
         f"expected value {expected_value:.2f} {state['currency']}; "
         f"threshold {fight_threshold:.2f}." + degradation_reason + expedited_reason
     )
-    logger.info("Chargeback decision calculated", extra=_decision_log_extra(state))
+    logger.info(
+        "Running scoring agent for %s",
+        state["chargeback_id"],
+        extra=_decision_log_extra(state),
+    )
     return state

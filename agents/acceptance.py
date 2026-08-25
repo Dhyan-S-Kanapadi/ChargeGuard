@@ -25,7 +25,8 @@ def accept_and_log_agent(state: ChargebackState) -> ChargebackState:
     if state.get("outcome_reason") is None:
         state["outcome_reason"] = "Chargeback accepted because representment was not economically justified."
     logger.info(
-        "Accepting chargeback without representment",
+        "Accepting chargeback %s without representment",
+        state["chargeback_id"],
         extra=_decision_log_extra(state),
     )
     return state

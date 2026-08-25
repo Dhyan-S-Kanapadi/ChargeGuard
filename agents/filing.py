@@ -38,5 +38,9 @@ def filing_agent(state: ChargebackState) -> ChargebackState:
     filed_at = datetime.now(timezone.utc)
     state["filed_at"] = filed_at
     state["filing_confirmation"] = _confirmation_id(state, filed_at)
-    logger.info("Filing chargeback representment", extra=_decision_log_extra(state))
+    logger.info(
+        "Running filing agent for %s",
+        state["chargeback_id"],
+        extra=_decision_log_extra(state),
+    )
     return state

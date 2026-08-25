@@ -27,5 +27,9 @@ def human_escalation_agent(state: ChargebackState) -> ChargebackState:
             state["outcome_reason"] = f"Human review required after automated quality rejection: {rejection}"
         else:
             state["outcome_reason"] = "Human review required before filing."
-    logger.info("Escalating chargeback for human review", extra=_decision_log_extra(state))
+    logger.info(
+        "Escalating chargeback %s for human review",
+        state["chargeback_id"],
+        extra=_decision_log_extra(state),
+    )
     return state

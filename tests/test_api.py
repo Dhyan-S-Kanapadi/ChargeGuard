@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 import pytest
 from fastapi import HTTPException
@@ -6,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from api.store import store
 from api.webhooks import enforce_webhook_rate_limit, reset_webhook_rate_limiter
+from core.state import ChargebackState
 from main import app
 from ml.train import train_baseline_model
 
@@ -107,22 +109,83 @@ def test_health_reports_model_and_stub_mode(tmp_path, monkeypatch) -> None:
     }
 
 
-def test_stats_returns_live_dispute_aggregates(configured_client: TestClient) -> None:
-    assert configured_client.post("/merchants", json=_merchant_payload()).status_code == 201
-    assert configured_client.post("/webhook/chargeback", json=_webhook_payload()).status_code == 202
-    second_payload = _webhook_payload()
-    second_payload["chargeback_id"] = "cb_api_002"
-    assert configured_client.post("/webhook/chargeback", json=second_payload).status_code == 202
+def _stats_state(
+    chargeback_id: str,
+    *,
+    decision: str,
+    expected_value: float,
+    final_outcome: str | None,
+    filed: bool,
+    degraded: bool,
+) -> ChargebackState:
+    return cast(
+        ChargebackState,
+        {
+            "chargeback_id": chargeback_id,
+            "decision": decision,
+            "expected_value": expected_value,
+            "final_outcome": final_outcome,
+            "quality_approved": filed,
+            "filed_at": datetime.now(timezone.utc) if filed else None,
+            "filing_confirmation": f"filed_visa_{chargeback_id}" if filed else None,
+            "evidence_collection_degraded": degraded,
+        },
+    )
 
-    response = configured_client.get("/stats")
+
+def test_stats_returns_correct_seeded_aggregates(client: TestClient) -> None:
+    assert store.create_dispute(
+        _stats_state(
+            "cb_stats_win",
+            decision="FIGHT",
+            expected_value=100.0,
+            final_outcome="WIN",
+            filed=True,
+            degraded=False,
+        )
+    )
+    assert store.create_dispute(
+        _stats_state(
+            "cb_stats_accept",
+            decision="ACCEPT",
+            expected_value=-15.0,
+            final_outcome="ACCEPTED_NO_CONTEST",
+            filed=False,
+            degraded=True,
+        )
+    )
+    assert store.create_dispute(
+        _stats_state(
+            "cb_stats_escalated",
+            decision="ESCALATE_DEGRADED",
+            expected_value=0.0,
+            final_outcome="PENDING",
+            filed=False,
+            degraded=True,
+        )
+    )
+    assert store.create_dispute(
+        _stats_state(
+            "cb_stats_loss",
+            decision="FIGHT",
+            expected_value=50.0,
+            final_outcome="LOSS",
+            filed=True,
+            degraded=False,
+        )
+    )
+
+    response = client.get("/stats")
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["total_disputes_processed"] == 2
-    assert set(payload["decisions"]) == {"FIGHT", "ACCEPT", "ESCALATE_DEGRADED"}
-    assert "win_rate" in payload
-    assert "average_expected_value" in payload
-    assert "evidence_collection_degraded_count" in payload
+    assert payload == {
+        "total_disputes_processed": 4,
+        "decisions": {"FIGHT": 2, "ACCEPT": 1, "ESCALATE_DEGRADED": 1},
+        "win_rate": 0.5,
+        "average_expected_value": 33.75,
+        "evidence_collection_degraded_count": 2,
+    }
 
 
 def test_webhook_runs_graph_and_exposes_completed_dispute(configured_client: TestClient) -> None:
