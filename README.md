@@ -212,6 +212,18 @@ Expected response:
 {"status":"ok"}
 ```
 
+## Demo
+
+Train the model, start the API with deterministic stub evidence and a local API key, then run the manual demo:
+
+```bash
+poetry run python -m ml.train
+CHARGEGUARD_USE_STUBS=true API_KEY=demo-key poetry run uvicorn main:app --port 8000
+API_KEY=demo-key poetry run python scripts/demo.py
+```
+
+The script creates one merchant and demonstrates the FIGHT, ACCEPT, and ESCALATE_DEGRADED decision paths, including the generated FIGHT rebuttal PDF path.
+
 ## API Usage
 
 ### Register A Merchant

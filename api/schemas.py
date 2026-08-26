@@ -37,6 +37,7 @@ class ChargebackWebhookPayload(BaseModel):
     payment_id: str = Field(min_length=1, max_length=200)
     tracking_id: str | None = None
     card_fingerprint: str | None = None
+    simulate_evidence_degraded: bool = False
 
     @field_validator("currency")
     @classmethod

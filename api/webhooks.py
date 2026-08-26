@@ -93,6 +93,10 @@ def _initial_state(
         "consortium": None,
         "delivery_photo": None,
         "order_timeline": None,
+        "evidence_collection_degraded": payload.simulate_evidence_degraded,
+        "degraded_reasons": (
+            ["demo_simulation"] if payload.simulate_evidence_degraded else []
+        ),
         "win_probability": None,
         "expected_value": None,
         "decision": None,
