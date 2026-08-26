@@ -127,6 +127,9 @@ def test_scoring_agent_uses_trained_model(
     assert result["win_probability"] >= 0.5
     assert result["expected_value"] is not None
     assert result["expected_value"] > 0
+    assert result["third_party_fraud_indicators"] is not None
+    assert result["identity_continuity"] is not None
+    assert "Third-party fraud indicators" in result["decision_reasoning"]
     assert "logistic_regression" in result["decision_reasoning"]
 
 

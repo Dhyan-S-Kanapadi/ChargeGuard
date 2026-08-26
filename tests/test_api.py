@@ -216,6 +216,8 @@ def test_webhook_runs_graph_and_exposes_completed_dispute(configured_client: Tes
     assert detail["state"]["filing_confirmation"].startswith("filed_visa_cb_api_001_")
     assert detail["state"]["final_outcome"] is None
     assert detail["state"]["outcome_recorded_at"] is None
+    assert detail["third_party_fraud_indicators"] == detail["state"]["third_party_fraud_indicators"]
+    assert detail["identity_continuity"] == detail["state"]["identity_continuity"]
 
     list_response = configured_client.get("/disputes")
     assert list_response.status_code == 200

@@ -77,7 +77,12 @@ def _state() -> ChargebackState:
 
 
 def test_rebuttal_packet_includes_status_sections_and_evidence() -> None:
-    packet = _build_rebuttal_packet(_state())
+    state = _state()
+    state["contradiction_flags"] = [
+        "claims non-receipt, but delivery confirmed with signature on file",
+    ]
+    state["contradiction_summary"] = "1 evidence contradiction identified: delivery signature is on file."
+    packet = _build_rebuttal_packet(state)
 
     assert packet["chargeback_id"] == "cb_rebuttal_001"
     assert packet["merchant"] == "Demo Merchant"
@@ -86,7 +91,11 @@ def test_rebuttal_packet_includes_status_sections_and_evidence() -> None:
     assert packet["evidence_status"]["device"] is False
     assert "3DS authentication completed" in packet["strongest_evidence"]
     assert "Shipment marked delivered" in packet["strongest_evidence"]
-    assert len(packet["sections"]) == 3
+    assert packet["sections"][-1] == {
+        "title": "Evidence contradictions",
+        "body": "1 evidence contradiction identified: delivery signature is on file.",
+    }
+    assert packet["contradiction_flags"] == state["contradiction_flags"]
     assert packet["evidence"]["transaction"] is not None
 
 

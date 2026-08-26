@@ -72,6 +72,10 @@ class DisputeDetail(BaseModel):
     chargeback_id: str
     status: str
     state: dict[str, Any]
+    win_probability: float | None = None
+    expected_value: float | None = None
+    third_party_fraud_indicators: dict[str, float | str] | None = None
+    identity_continuity: dict[str, float | str] | None = None
     error: str | None
     created_at: datetime
     updated_at: datetime

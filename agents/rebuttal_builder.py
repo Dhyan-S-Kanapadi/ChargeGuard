@@ -66,7 +66,7 @@ def _strongest_evidence(state: ChargebackState) -> list[str]:
 
 def _rebuttal_sections(state: ChargebackState) -> list[dict[str, str]]:
     strongest = _strongest_evidence(state)
-    return [
+    sections = [
         {
             "title": "Dispute summary",
             "body": (
@@ -83,6 +83,15 @@ def _rebuttal_sections(state: ChargebackState) -> list[dict[str, str]]:
             "body": "; ".join(strongest) if strongest else "No strong evidence signals were available.",
         },
     ]
+    if state.get("contradiction_flags"):
+        sections.append(
+            {
+                "title": "Evidence contradictions",
+                "body": state.get("contradiction_summary")
+                or "; ".join(state["contradiction_flags"]),
+            }
+        )
+    return sections
 
 
 def _playbook_path(state: ChargebackState) -> Path:
@@ -130,6 +139,10 @@ def _build_rebuttal_packet(state: ChargebackState) -> dict[str, Any]:
         "currency": state["currency"],
         "win_probability": state.get("win_probability"),
         "expected_value": state.get("expected_value"),
+        "third_party_fraud_indicators": state.get("third_party_fraud_indicators"),
+        "identity_continuity": state.get("identity_continuity"),
+        "contradiction_flags": state.get("contradiction_flags", []),
+        "contradiction_summary": state.get("contradiction_summary"),
         "decision_reasoning": state.get("decision_reasoning"),
         "evidence_status": _evidence_status(state),
         "required_evidence": playbook["required_evidence"],

@@ -86,7 +86,14 @@ def get_dispute(
         raise HTTPException(status_code=404, detail="Dispute not found.")
     if not include_raw:
         record["state"] = _redact_state(record["state"])
-    return DisputeDetail(**record)
+    state = record["state"]
+    return DisputeDetail(
+        **record,
+        win_probability=state.get("win_probability"),
+        expected_value=state.get("expected_value"),
+        third_party_fraud_indicators=state.get("third_party_fraud_indicators"),
+        identity_continuity=state.get("identity_continuity"),
+    )
 
 
 @router.post("/{chargeback_id}/outcome", response_model=OutcomeResponse)

@@ -2,9 +2,11 @@ import logging
 import os
 from pathlib import Path
 
+from agents.contradiction import contradictions_from_state
 from core.currency import convert_currency
 from core.state import ChargebackState
 from ml.model import WinProbabilityModel
+from ml.subscores import subscores_from_state
 
 
 logger = logging.getLogger(__name__)
@@ -53,6 +55,14 @@ def _predict_win_probability(state: ChargebackState) -> tuple[float, str]:
 def scoring_agent(state: ChargebackState) -> ChargebackState:
     """Predict win probability and apply the deterministic EV decision rule."""
     win_probability, model_source = _predict_win_probability(state)
+    subscores: dict[str, dict[str, float | str]] | None = None
+    if model_source == "logistic_regression":
+        try:
+            subscores = subscores_from_state(state)
+        except Exception:
+            logger.exception("Unable to calculate model-backed evidence sub-scores")
+
+    contradictions = contradictions_from_state(state)
     response_cost = _float_env("RESPONSE_COST_USD", 15.0)
     response_cost = convert_currency(response_cost, "USD", state["currency"])
     fight_threshold = _float_env("FIGHT_EV_THRESHOLD", 0.0)
@@ -66,6 +76,12 @@ def scoring_agent(state: ChargebackState) -> ChargebackState:
 
     state["win_probability"] = win_probability
     state["expected_value"] = expected_value
+    state["third_party_fraud_indicators"] = (
+        subscores["third_party_fraud_indicators"] if subscores else None
+    )
+    state["identity_continuity"] = subscores["identity_continuity"] if subscores else None
+    state["contradiction_flags"] = contradictions["flags"]
+    state["contradiction_summary"] = contradictions["summary"]
     state["decision"] = decision
     degradation_reason = " Evidence or model availability is degraded; human review required." if (
         is_degraded or model_failed
@@ -73,10 +89,26 @@ def scoring_agent(state: ChargebackState) -> ChargebackState:
     expedited_reason = " Expedited partial-evidence decision due to overdue filing deadline." if (
         state.get("investigation_plan", {}).get("priority") == "overdue"
     ) else ""
+    subscore_reason = ""
+    if subscores:
+        fraud = subscores["third_party_fraud_indicators"]
+        identity = subscores["identity_continuity"]
+        subscore_reason = (
+            " Third-party fraud indicators "
+            f"{fraud['score']:.1f}/100 ({fraud['label']}); identity continuity "
+            f"{identity['score']:.1f}/100 ({identity['label']})."
+        )
+    contradiction_reason = (
+        f" {contradictions['summary']}" if contradictions["summary"] else ""
+    )
     state["decision_reasoning"] = (
         f"Model {model_source}; win probability {win_probability:.1%}; "
         f"expected value {expected_value:.2f} {state['currency']}; "
-        f"threshold {fight_threshold:.2f}." + degradation_reason + expedited_reason
+        f"threshold {fight_threshold:.2f}."
+        + subscore_reason
+        + contradiction_reason
+        + degradation_reason
+        + expedited_reason
     )
     logger.info(
         "Running scoring agent for %s",
