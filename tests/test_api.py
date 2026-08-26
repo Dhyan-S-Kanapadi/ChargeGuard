@@ -1,9 +1,13 @@
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from api.store import store
+from api.webhooks import enforce_webhook_rate_limit, reset_webhook_rate_limiter
+from core.state import ChargebackState
 from main import app
 from ml.train import train_baseline_model
 
@@ -11,13 +15,16 @@ from ml.train import train_baseline_model
 @pytest.fixture(autouse=True)
 def clear_store() -> None:
     store.clear()
+    reset_webhook_rate_limiter()
     yield
     store.clear()
+    reset_webhook_rate_limiter()
 
 
-@pytest.fixture(scope="module")
-def client() -> TestClient:
-    return TestClient(app)
+@pytest.fixture
+def client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("API_KEY", "test-api-key")
+    return TestClient(app, headers={"X-API-Key": "test-api-key"})
 
 
 @pytest.fixture
@@ -71,6 +78,116 @@ def _contains_key(value, blocked_key: str) -> bool:
     return False
 
 
+def test_api_key_is_required(monkeypatch) -> None:
+    monkeypatch.setenv("API_KEY", "test-api-key")
+    unauthenticated_client = TestClient(app)
+
+    response = unauthenticated_client.get("/disputes")
+    authenticated_response = unauthenticated_client.get(
+        "/disputes",
+        headers={"X-API-Key": "test-api-key"},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Missing or invalid API key."
+    assert authenticated_response.status_code == 200
+
+
+def test_health_reports_model_and_stub_mode(tmp_path, monkeypatch) -> None:
+    model_path = tmp_path / "model.pkl"
+    train_baseline_model(output_path=model_path, count=200, seed=42)
+    monkeypatch.setenv("MODEL_PATH", str(model_path))
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
+
+    response = TestClient(app).get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "model_loaded": True,
+        "stub_mode": True,
+    }
+
+
+def _stats_state(
+    chargeback_id: str,
+    *,
+    decision: str,
+    expected_value: float,
+    final_outcome: str | None,
+    filed: bool,
+    degraded: bool,
+) -> ChargebackState:
+    return cast(
+        ChargebackState,
+        {
+            "chargeback_id": chargeback_id,
+            "decision": decision,
+            "expected_value": expected_value,
+            "final_outcome": final_outcome,
+            "quality_approved": filed,
+            "filed_at": datetime.now(timezone.utc) if filed else None,
+            "filing_confirmation": f"filed_visa_{chargeback_id}" if filed else None,
+            "evidence_collection_degraded": degraded,
+        },
+    )
+
+
+def test_stats_returns_correct_seeded_aggregates(client: TestClient) -> None:
+    assert store.create_dispute(
+        _stats_state(
+            "cb_stats_win",
+            decision="FIGHT",
+            expected_value=100.0,
+            final_outcome="WIN",
+            filed=True,
+            degraded=False,
+        )
+    )
+    assert store.create_dispute(
+        _stats_state(
+            "cb_stats_accept",
+            decision="ACCEPT",
+            expected_value=-15.0,
+            final_outcome="ACCEPTED_NO_CONTEST",
+            filed=False,
+            degraded=True,
+        )
+    )
+    assert store.create_dispute(
+        _stats_state(
+            "cb_stats_escalated",
+            decision="ESCALATE_DEGRADED",
+            expected_value=0.0,
+            final_outcome="PENDING",
+            filed=False,
+            degraded=True,
+        )
+    )
+    assert store.create_dispute(
+        _stats_state(
+            "cb_stats_loss",
+            decision="FIGHT",
+            expected_value=50.0,
+            final_outcome="LOSS",
+            filed=True,
+            degraded=False,
+        )
+    )
+
+    response = client.get("/stats")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {
+        "total_disputes_processed": 4,
+        "decisions": {"FIGHT": 2, "ACCEPT": 1, "ESCALATE_DEGRADED": 1},
+        "win_rate": 0.5,
+        "average_expected_value": 33.75,
+        "evidence_collection_degraded_count": 2,
+    }
+
+
 def test_webhook_runs_graph_and_exposes_completed_dispute(configured_client: TestClient) -> None:
     merchant_response = configured_client.post("/merchants", json=_merchant_payload())
 
@@ -99,6 +216,8 @@ def test_webhook_runs_graph_and_exposes_completed_dispute(configured_client: Tes
     assert detail["state"]["filing_confirmation"].startswith("filed_visa_cb_api_001_")
     assert detail["state"]["final_outcome"] is None
     assert detail["state"]["outcome_recorded_at"] is None
+    assert detail["third_party_fraud_indicators"] == detail["state"]["third_party_fraud_indicators"]
+    assert detail["identity_continuity"] == detail["state"]["identity_continuity"]
 
     list_response = configured_client.get("/disputes")
     assert list_response.status_code == 200
@@ -163,6 +282,19 @@ def test_webhook_rejects_duplicate_chargeback(configured_client: TestClient) -> 
 
     assert duplicate.status_code == 409
     assert duplicate.json()["detail"] == "Chargeback already exists."
+
+
+def test_webhook_rate_limit_rejects_thirty_first_request(monkeypatch) -> None:
+    monkeypatch.setenv("WEBHOOK_RATE_LIMIT_PER_MINUTE", "30")
+
+    for _ in range(30):
+        enforce_webhook_rate_limit("test-api-key")
+
+    with pytest.raises(HTTPException) as raised:
+        enforce_webhook_rate_limit("test-api-key")
+
+    assert raised.value.status_code == 429
+    assert raised.value.headers["Retry-After"]
 
 
 def test_webhook_rejects_past_deadline(client: TestClient) -> None:

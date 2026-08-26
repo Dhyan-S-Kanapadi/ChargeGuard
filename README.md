@@ -30,7 +30,7 @@ Implemented:
 - In-memory dispute store for local development, with optional JSON persistence
 - LangGraph workflow with all core nodes wired
 - Orchestrator playbook routing
-- Transaction evidence with Razorpay and Stripe support
+- Razorpay and Stripe support (adapter pattern designed to extend to additional gateways)
 - Shipping evidence with Shiprocket and Delhivery support
 - Communications evidence with Freshdesk and Gmail reader support
 - Device evidence with SEON support
@@ -349,7 +349,7 @@ python -m pytest -q tests/test_scoring.py
 
 Evidence agents are built to prefer the configured merchant provider and fall back where supported:
 
-- Payments: Razorpay or Stripe, with additional provider integrations available.
+- Payments: Razorpay or Stripe.
 - Shipping: Shiprocket, with Delhivery fallback.
 - Communications: Freshdesk and Gmail can both contribute evidence.
 - Fraud/device: SEON.
@@ -388,6 +388,13 @@ Model roadmap:
 - Continue with logistic regression until enough real outcomes are collected.
 - Move to XGBoost after 100+ real labelled cases.
 - Track win rate, decision accuracy, evidence coverage, and quality-loop pass rate.
+
+## Known Limitations
+
+- Dispute storage is in-memory by default and does not survive restarts unless optional local JSON persistence is configured.
+- The filing layer is a local stub and is not connected to real card-network APIs.
+- The win-probability model is seeded with synthetic data that decays out as real WIN/LOSS outcomes accumulate.
+- API authentication currently uses a shared environment-configured API key rather than per-merchant identity and authorization.
 
 ## License
 

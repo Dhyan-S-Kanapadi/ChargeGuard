@@ -117,6 +117,10 @@ class ChargebackState(TypedDict):
     # Intelligence
     win_probability: Optional[float]
     expected_value: Optional[float]
+    third_party_fraud_indicators: NotRequired[dict[str, float | str] | None]
+    identity_continuity: NotRequired[dict[str, float | str] | None]
+    contradiction_flags: NotRequired[list[str]]
+    contradiction_summary: NotRequired[Optional[str]]
     decision: Optional[Literal["FIGHT", "ACCEPT", "ESCALATE_DEGRADED"]]
     decision_reasoning: Optional[str]
 

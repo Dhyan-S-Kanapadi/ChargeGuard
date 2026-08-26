@@ -1,8 +1,13 @@
 import logging
+import math
+import os
+from threading import Lock
+import time
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
+from api.auth import require_api_key
 from api.schemas import ChargebackWebhookPayload, WebhookAccepted
 from api.store import store
 from core.graph import app as chargeback_graph
@@ -10,7 +15,47 @@ from core.state import ChargebackState
 
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/webhook", tags=["webhooks"])
+router = APIRouter(
+    prefix="/webhook",
+    tags=["webhooks"],
+    dependencies=[Depends(require_api_key)],
+)
+_RATE_LIMIT_LOCK = Lock()
+_RATE_LIMIT_BUCKETS: dict[str, tuple[float, float]] = {}
+
+
+def _rate_limit_per_minute() -> int:
+    try:
+        return max(1, int(os.getenv("WEBHOOK_RATE_LIMIT_PER_MINUTE", "30")))
+    except ValueError:
+        logger.warning("Invalid WEBHOOK_RATE_LIMIT_PER_MINUTE; using 30")
+        return 30
+
+
+def enforce_webhook_rate_limit(api_key: str = Depends(require_api_key)) -> None:
+    limit = _rate_limit_per_minute()
+    now = time.monotonic()
+    refill_per_second = limit / 60
+    with _RATE_LIMIT_LOCK:
+        tokens, last_updated = _RATE_LIMIT_BUCKETS.get(api_key, (float(limit), now))
+        tokens = min(float(limit), tokens + ((now - last_updated) * refill_per_second))
+        if tokens >= 1:
+            _RATE_LIMIT_BUCKETS[api_key] = (tokens - 1, now)
+            return
+        retry_after = max(1, math.ceil((1 - tokens) / refill_per_second))
+        _RATE_LIMIT_BUCKETS[api_key] = (tokens, now)
+
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="Webhook rate limit exceeded.",
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+def reset_webhook_rate_limiter() -> None:
+    """Reset process-local state for tests."""
+    with _RATE_LIMIT_LOCK:
+        _RATE_LIMIT_BUCKETS.clear()
 
 
 def run_chargeback_graph(state: ChargebackState) -> None:
@@ -77,6 +122,7 @@ def _initial_state(
 def receive_chargeback(
     payload: ChargebackWebhookPayload,
     background_tasks: BackgroundTasks,
+    _: None = Depends(enforce_webhook_rate_limit),
 ) -> WebhookAccepted:
     merchant = store.get_merchant(payload.merchant_id)
     if merchant is None:

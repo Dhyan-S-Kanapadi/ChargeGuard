@@ -1,0 +1,13 @@
+.git
+.github
+.pytest_cache
+__pycache__
+*.py[cod]
+.venv
+# Model artifacts must be trained in the container or mounted at runtime, not baked into the image.
+ml/artifacts
+output/rebuttals
+data
+tests
+pytest-tmp*
+.env
