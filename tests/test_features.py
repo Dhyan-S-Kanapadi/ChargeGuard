@@ -45,6 +45,7 @@ def test_features_from_state_extracts_and_clamps_signals() -> None:
     assert features["customer_order_history"] == 50
     assert features["fraud_score"] == 100.0
     assert features["delivery_confirmed"] == 1
+    assert features["shipping_status_confirmed_delivered"] == 1
     assert features["consortium_match"] == 1
     assert features["cross_merchant_fraud"] == 1
     assert len(feature_vector(state)) == len(FEATURE_NAMES)
@@ -110,3 +111,28 @@ def test_amount_buckets_reject_unknown_currency() -> None:
         assert "Unsupported dispute currency: EUR" in str(exc)
     else:
         raise AssertionError("unsupported currencies must not be bucketed silently")
+
+
+def test_shipping_statuses_are_distinct_scoring_features() -> None:
+    base_state = {
+        "chargeback_id": "cb_shipping_status",
+        "reason_code": "13.1",
+        "card_network": "VISA",
+        "dispute_amount": 2500.0,
+        "currency": "INR",
+        "filing_deadline": datetime(2026, 7, 1, tzinfo=timezone.utc),
+        "merchant_profile": {},
+    }
+
+    in_transit = features_from_state(
+        {**base_state, "shipping": {"status": "IN TRANSIT"}}
+    )
+    lost = features_from_state({**base_state, "shipping": {"status": "LOST"}})
+    returned = features_from_state(
+        {**base_state, "shipping": {"status": "RTO DELIVERED"}}
+    )
+
+    assert in_transit["shipping_status_in_transit"] == 1
+    assert lost["shipping_status_lost"] == 1
+    assert returned["shipping_status_returned"] == 1
+    assert in_transit != lost != returned

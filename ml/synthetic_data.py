@@ -16,6 +16,10 @@ def _synthetic_row(rng: random.Random) -> FeatureRow:
     consortium_match = _bernoulli(rng, 0.08)
     cross_merchant_fraud = _bernoulli(rng, 0.10 if not consortium_match else 0.55)
     delivery_confirmed = _bernoulli(rng, 0.72)
+    non_delivery_status = rng.choices(
+        ("in_transit", "lost", "returned", "unknown"),
+        weights=(60, 15, 20, 5),
+    )[0]
 
     return {
         "otp_verified": _bernoulli(rng, 0.68),
@@ -23,6 +27,16 @@ def _synthetic_row(rng: random.Random) -> FeatureRow:
         "customer_order_history": min(int(rng.expovariate(1 / 8)), 50),
         "previous_chargebacks": min(int(rng.expovariate(1 / 0.7)), 6),
         "delivery_confirmed": delivery_confirmed,
+        "shipping_status_confirmed_delivered": delivery_confirmed,
+        "shipping_status_in_transit": int(
+            not delivery_confirmed and non_delivery_status == "in_transit"
+        ),
+        "shipping_status_lost": int(
+            not delivery_confirmed and non_delivery_status == "lost"
+        ),
+        "shipping_status_returned": int(
+            not delivery_confirmed and non_delivery_status == "returned"
+        ),
         "gps_coordinates_present": delivery_confirmed * _bernoulli(rng, 0.72),
         "signature_obtained": delivery_confirmed * _bernoulli(rng, 0.58),
         "fraud_score": round(min(max(rng.gauss(36, 22), 0), 100), 2),

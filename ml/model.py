@@ -14,7 +14,7 @@ from ml.synthetic_data import FeatureRow
 class WinProbabilityModel:
     """Versioned sklearn baseline for chargeback win probability."""
 
-    artifact_version = 2
+    artifact_version = 3
 
     def __init__(self, *, random_state: int = 42) -> None:
         self.feature_names = FEATURE_NAMES

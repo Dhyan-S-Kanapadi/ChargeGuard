@@ -1,6 +1,7 @@
 from typing import Final
 
 from core.state import ChargebackState
+from core.shipping_status import categorize_shipping_status
 
 
 FEATURE_NAMES: Final[tuple[str, ...]] = (
@@ -9,6 +10,10 @@ FEATURE_NAMES: Final[tuple[str, ...]] = (
     "customer_order_history",
     "previous_chargebacks",
     "delivery_confirmed",
+    "shipping_status_confirmed_delivered",
+    "shipping_status_in_transit",
+    "shipping_status_lost",
+    "shipping_status_returned",
     "gps_coordinates_present",
     "signature_obtained",
     "fraud_score",
@@ -80,13 +85,22 @@ def features_from_state(state: ChargebackState) -> dict[str, float | int]:
     device = state.get("device") or {}
     consortium = state.get("consortium") or {}
     comms = state.get("comms") or {}
+    shipping_status = shipping.get("status_category") or categorize_shipping_status(
+        str(shipping.get("status", ""))
+    )
 
     features: dict[str, float | int] = {
         "otp_verified": int(bool(transaction.get("otp_verified"))),
         "three_ds_authenticated": int(bool(transaction.get("three_ds_authenticated"))),
         "customer_order_history": min(max(int(transaction.get("order_history_count", 0)), 0), 50),
         "previous_chargebacks": max(int(transaction.get("previous_chargebacks", 0)), 0),
-        "delivery_confirmed": int(str(shipping.get("status", "")).upper() == "DELIVERED"),
+        "delivery_confirmed": int(shipping_status == "CONFIRMED_DELIVERED"),
+        "shipping_status_confirmed_delivered": int(
+            shipping_status == "CONFIRMED_DELIVERED"
+        ),
+        "shipping_status_in_transit": int(shipping_status == "IN_TRANSIT"),
+        "shipping_status_lost": int(shipping_status == "LOST"),
+        "shipping_status_returned": int(shipping_status == "RETURNED"),
         "gps_coordinates_present": int(
             shipping.get("delivery_latitude") is not None
             and shipping.get("delivery_longitude") is not None

@@ -98,7 +98,7 @@ def _retrain(records: list[dict[str, Any]]) -> tuple[Path, dict[str, int]]:
     rows, labels = generate_synthetic_dataset(count=synthetic_count, seed=42)
     for record in records:
         features = record["features"]
-        rows.append({name: features[name] for name in FEATURE_NAMES})
+        rows.append({name: features.get(name, 0) for name in FEATURE_NAMES})
         labels.append(int(record["label"]))
     model = WinProbabilityModel(random_state=42).fit(rows, labels)
     metadata = {

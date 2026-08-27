@@ -1,6 +1,8 @@
 from datetime import datetime
 from typing import Literal, NotRequired, Optional, TypedDict
 
+from core.shipping_status import ShippingStatusCategory
+
 
 class MerchantProfile(TypedDict):
     merchant_id: str
@@ -33,6 +35,7 @@ class ShippingEvidence(TypedDict):
     tracking_id: str
     courier: str
     status: str
+    status_category: ShippingStatusCategory
     delivered_at: Optional[datetime]
     delivery_latitude: Optional[float]
     delivery_longitude: Optional[float]
