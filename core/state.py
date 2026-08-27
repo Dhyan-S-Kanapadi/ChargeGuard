@@ -121,6 +121,7 @@ class ChargebackState(TypedDict):
     identity_continuity: NotRequired[dict[str, float | str] | None]
     contradiction_flags: NotRequired[list[str]]
     contradiction_summary: NotRequired[Optional[str]]
+    requires_human_review: NotRequired[bool]
     decision: Optional[Literal["FIGHT", "ACCEPT", "ESCALATE_DEGRADED"]]
     decision_reasoning: Optional[str]
 

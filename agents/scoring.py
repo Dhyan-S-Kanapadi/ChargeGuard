@@ -40,7 +40,16 @@ def _predict_win_probability(state: ChargebackState) -> tuple[float, str]:
         os.getenv("MODEL_PATH", "./ml/artifacts/win_probability_model.pkl")
     )
     if not artifact_path.is_file():
-        logger.error("Win probability model is unavailable at %s", artifact_path)
+        logger.error(
+            "Win probability model is unavailable at %s; human review required",
+            artifact_path,
+            extra={
+                "chargeback_id": state["chargeback_id"],
+                "model_path": str(artifact_path),
+                "model_failure": "model_unavailable",
+                "requires_human_review": True,
+            },
+        )
         return 0.0, "model_unavailable"
 
     try:
@@ -48,7 +57,15 @@ def _predict_win_probability(state: ChargebackState) -> tuple[float, str]:
         probability = min(max(model.predict(state), 0.0), 1.0)
         return round(probability, 6), "logistic_regression"
     except Exception:
-        logger.exception("Unable to load or execute win probability model")
+        logger.exception(
+            "Unable to load or execute win probability model; human review required",
+            extra={
+                "chargeback_id": state["chargeback_id"],
+                "model_path": str(artifact_path),
+                "model_failure": "model_error",
+                "requires_human_review": True,
+            },
+        )
         return 0.0, "model_error"
 
 
@@ -68,6 +85,7 @@ def scoring_agent(state: ChargebackState) -> ChargebackState:
     expected_value = round((win_probability * state["dispute_amount"]) - response_cost, 2)
     is_degraded = state.get("evidence_collection_degraded", False)
     model_failed = model_source != "logistic_regression"
+    state["requires_human_review"] = is_degraded or model_failed
     if is_degraded or model_failed:
         decision = "ESCALATE_DEGRADED"
     else:
