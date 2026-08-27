@@ -1,6 +1,5 @@
 from typing import Final
 
-from core.currency import convert_currency
 from core.state import ChargebackState
 
 
@@ -41,14 +40,27 @@ _REASON_CODE_ENCODINGS: Final = {
 }
 
 
-def bucket_amount(amount: float, currency: str = "USD") -> int:
-    """Bucket dispute value using normalized USD ranges."""
-    amount_usd = convert_currency(amount, currency, "USD")
-    if amount_usd < 1_000:
+# Bucket boundaries represent equivalent values at the model's fixed INR/USD
+# reference rate. They are explicit per currency so unsupported currencies fail.
+_AMOUNT_BUCKET_THRESHOLDS: Final[dict[str, tuple[float, float, float]]] = {
+    "INR": (1_000.0, 5_000.0, 10_000.0),
+    "USD": (1_000.0 / 83.0, 5_000.0 / 83.0, 10_000.0 / 83.0),
+}
+
+
+def bucket_amount(amount: float, currency: str) -> int:
+    """Bucket dispute value using an explicit scale for its currency."""
+    normalized_currency = currency.strip().upper()
+    try:
+        low, medium, high = _AMOUNT_BUCKET_THRESHOLDS[normalized_currency]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported dispute currency: {normalized_currency or '<empty>'}") from exc
+
+    if amount < low:
         return 0
-    if amount_usd < 5_000:
+    if amount < medium:
         return 1
-    if amount_usd < 10_000:
+    if amount < high:
         return 2
     return 3
 
