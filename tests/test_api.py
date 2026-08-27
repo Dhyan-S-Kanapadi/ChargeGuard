@@ -284,6 +284,23 @@ def test_webhook_rejects_duplicate_chargeback(configured_client: TestClient) -> 
     assert duplicate.json()["detail"] == "Chargeback already exists."
 
 
+def test_webhook_degradation_simulation_routes_to_human_review(
+    configured_client: TestClient,
+) -> None:
+    assert configured_client.post("/merchants", json=_merchant_payload()).status_code == 201
+    payload = _webhook_payload()
+    payload["chargeback_id"] = "cb_api_escalate_001"
+    payload["simulate_evidence_degraded"] = True
+
+    response = configured_client.post("/webhook/chargeback", json=payload)
+
+    assert response.status_code == 202
+    detail = configured_client.get("/disputes/cb_api_escalate_001").json()
+    assert detail["state"]["decision"] == "ESCALATE_DEGRADED"
+    assert detail["state"]["degraded_reasons"] == ["demo_simulation"]
+    assert detail["state"]["final_outcome"] == "PENDING"
+
+
 def test_webhook_rate_limit_rejects_thirty_first_request(monkeypatch) -> None:
     monkeypatch.setenv("WEBHOOK_RATE_LIMIT_PER_MINUTE", "30")
 
