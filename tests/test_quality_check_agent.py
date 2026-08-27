@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from agents.quality_check import quality_check_agent
+from core.graph import route_quality
 from core.state import ChargebackState
 from documents.pdf_builder import build_rebuttal_pdf
 
@@ -101,7 +102,10 @@ def test_quality_check_rejects_missing_required_evidence(tmp_path) -> None:
     result = quality_check_agent(state)
 
     assert result["quality_approved"] is False
-    assert result["quality_rejection_reason"] == "Missing required evidence: shipping."
+    assert result["quality_rejection_reason"] == "missing_shipping_evidence"
+    assert result["quality_rejection_details"] == {"missing_evidence": ["shipping"]}
+    assert result["quality_auto_fixable"] is False
+    assert route_quality(result) == "escalate"
 
 
 def test_quality_check_rejects_non_pdf_document(tmp_path) -> None:
@@ -113,7 +117,7 @@ def test_quality_check_rejects_non_pdf_document(tmp_path) -> None:
     result = quality_check_agent(state)
 
     assert result["quality_approved"] is False
-    assert result["quality_rejection_reason"] == "Rebuttal document is not a valid PDF."
+    assert result["quality_rejection_reason"] == "invalid_rebuttal_document"
 
 
 def test_quality_check_enforces_three_attempt_limit() -> None:
@@ -124,4 +128,4 @@ def test_quality_check_enforces_three_attempt_limit() -> None:
 
     assert result["quality_loop_count"] == 3
     assert result["quality_approved"] is False
-    assert result["quality_rejection_reason"] == "Quality review attempt limit reached."
+    assert result["quality_rejection_reason"] == "quality_attempt_limit_reached"

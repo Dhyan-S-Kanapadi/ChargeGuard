@@ -129,6 +129,8 @@ class ChargebackState(TypedDict):
     rebuttal_document_path: Optional[str]
     quality_approved: bool
     quality_rejection_reason: Optional[str]
+    quality_rejection_details: NotRequired[dict]
+    quality_auto_fixable: NotRequired[bool]
     quality_loop_count: int
     filing_confirmation: Optional[str]
     filed_at: Optional[datetime]

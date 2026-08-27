@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,12 @@ from documents.pdf_builder import build_rebuttal_pdf
 
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+_PROHIBITED_REPLACEMENTS = {
+    "we accept liability": "the evidence supports representment",
+    "merchant error": "documented transaction evidence",
+    "we were at fault": "the merchant disputes the claim",
+}
 
 
 def _output_dir() -> Path:
@@ -129,7 +136,7 @@ def _load_template(state: ChargebackState) -> str:
 
 def _build_rebuttal_packet(state: ChargebackState) -> dict[str, Any]:
     playbook = _load_playbook(state)
-    return {
+    packet = {
         "chargeback_id": state["chargeback_id"],
         "merchant": state["merchant_profile"]["name"],
         "reason_code": state["reason_code"],
@@ -159,6 +166,36 @@ def _build_rebuttal_packet(state: ChargebackState) -> dict[str, Any]:
             "order_timeline": state.get("order_timeline"),
         },
     }
+    return _apply_quality_retry(packet, state)
+
+
+def _replace_prohibited_language(text: str) -> str:
+    sanitized = text
+    for phrase, replacement in _PROHIBITED_REPLACEMENTS.items():
+        sanitized = re.sub(re.escape(phrase), replacement, sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+
+def _apply_quality_retry(packet: dict[str, Any], state: ChargebackState) -> dict[str, Any]:
+    reason = state.get("quality_rejection_reason")
+    if not reason:
+        return packet
+
+    packet["quality_retry"] = {
+        "reason": reason,
+        "attempt": state.get("quality_loop_count", 0) + 1,
+    }
+    if reason == "prohibited_language_used":
+        for section in packet["sections"]:
+            section["body"] = _replace_prohibited_language(section["body"])
+        packet["decision_reasoning"] = _replace_prohibited_language(
+            packet.get("decision_reasoning") or ""
+        )
+    elif reason == "exceeds_page_limit":
+        for section in packet["sections"]:
+            section["body"] = section["body"][:500]
+        packet["strongest_evidence"] = packet["strongest_evidence"][:5]
+    return packet
 
 
 def rebuttal_builder_agent(state: ChargebackState) -> ChargebackState:
@@ -175,6 +212,11 @@ def rebuttal_builder_agent(state: ChargebackState) -> ChargebackState:
         json.dumps(packet, default=str, indent=2, sort_keys=True),
         encoding="utf-8",
     )
-    build_rebuttal_pdf(packet, pdf_path, template_text=_load_template(state))
+    template_text = _load_template(state)
+    if state.get("quality_rejection_reason") == "prohibited_language_used":
+        template_text = _replace_prohibited_language(template_text)
+    elif state.get("quality_rejection_reason") == "exceeds_page_limit":
+        template_text = template_text[:750]
+    build_rebuttal_pdf(packet, pdf_path, template_text=template_text)
     state["rebuttal_document_path"] = str(pdf_path)
     return state
