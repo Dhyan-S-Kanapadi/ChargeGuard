@@ -10,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from api.auth import require_api_key
 from api.schemas import ChargebackWebhookPayload, WebhookAccepted
 from api.store import store
+from core.deadlines import filing_deadline_for_network
 from core.graph import app as chargeback_graph
 from core.state import ChargebackState
 
@@ -73,6 +74,7 @@ def _initial_state(
     payload: ChargebackWebhookPayload,
     merchant_profile,
 ) -> ChargebackState:
+    received_at = datetime.now(timezone.utc)
     state: ChargebackState = {
         "chargeback_id": payload.chargeback_id,
         "order_id": payload.order_id,
@@ -81,8 +83,12 @@ def _initial_state(
         "card_network": payload.card_network,
         "dispute_amount": payload.dispute_amount,
         "currency": payload.currency,
-        "filing_deadline": payload.filing_deadline,
-        "chargeback_received_at": datetime.now(timezone.utc),
+        "filing_deadline": filing_deadline_for_network(
+            payload.card_network,
+            received_at=received_at,
+            provided_deadline=payload.filing_deadline,
+        ),
+        "chargeback_received_at": received_at,
         "merchant_profile": merchant_profile,
         "investigation_plan": {},
         "requires_food_agents": False,

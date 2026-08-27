@@ -103,12 +103,21 @@ def _rebuttal_sections(state: ChargebackState) -> list[dict[str, str]]:
 
 def _playbook_path(state: ChargebackState) -> Path:
     network = state["card_network"].lower()
-    filename = "mastercard_playbooks.json" if network == "mastercard" else "visa_playbooks.json"
+    filename = {
+        "visa": "visa_playbooks.json",
+        "mastercard": "mastercard_playbooks.json",
+        "rupay": "rupay_playbooks.json",
+    }.get(network)
+    if filename is None:
+        raise ValueError(f"No playbook namespace for card network {state['card_network']}")
     return PROJECT_ROOT / "documents" / "playbooks" / filename
 
 
 def _template_network(state: ChargebackState) -> str:
-    return "mastercard" if state["card_network"] == "MASTERCARD" else "visa"
+    network = state["card_network"].lower()
+    if network not in {"visa", "mastercard", "rupay"}:
+        raise ValueError(f"No rebuttal template namespace for card network {state['card_network']}")
+    return network
 
 
 def _load_playbook(state: ChargebackState) -> dict[str, Any]:
