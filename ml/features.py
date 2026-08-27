@@ -11,10 +11,7 @@ FEATURE_NAMES: Final[tuple[str, ...]] = (
     "customer_order_history",
     "previous_chargebacks",
     "delivery_confirmed",
-    "shipping_status_confirmed_delivered",
-    "shipping_status_in_transit",
-    "shipping_status_lost",
-    "shipping_status_returned",
+    "shipping_status_encoded",
     "gps_coordinates_present",
     "signature_obtained",
     "fraud_score",
@@ -51,6 +48,14 @@ _REASON_CODE_ENCODINGS: Final = {
 _AMOUNT_BUCKET_THRESHOLDS: Final[dict[str, tuple[float, float, float]]] = {
     "INR": (1_000.0, 5_000.0, 10_000.0),
     "USD": (1_000.0 / 83.0, 5_000.0 / 83.0, 10_000.0 / 83.0),
+}
+
+_SHIPPING_STATUS_ENCODINGS: Final = {
+    "LOST": 0,
+    "RETURNED": 1,
+    "UNKNOWN": 2,
+    "IN_TRANSIT": 3,
+    "CONFIRMED_DELIVERED": 4,
 }
 
 
@@ -99,12 +104,7 @@ def features_from_state(state: ChargebackState) -> dict[str, float | int]:
         "customer_order_history": min(max(int(transaction.get("order_history_count", 0)), 0), 50),
         "previous_chargebacks": max(int(transaction.get("previous_chargebacks", 0)), 0),
         "delivery_confirmed": int(shipping_status == "CONFIRMED_DELIVERED"),
-        "shipping_status_confirmed_delivered": int(
-            shipping_status == "CONFIRMED_DELIVERED"
-        ),
-        "shipping_status_in_transit": int(shipping_status == "IN_TRANSIT"),
-        "shipping_status_lost": int(shipping_status == "LOST"),
-        "shipping_status_returned": int(shipping_status == "RETURNED"),
+        "shipping_status_encoded": _SHIPPING_STATUS_ENCODINGS[shipping_status],
         "gps_coordinates_present": int(
             shipping.get("delivery_latitude") is not None
             and shipping.get("delivery_longitude") is not None
