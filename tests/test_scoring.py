@@ -140,7 +140,7 @@ def test_scoring_agent_escalates_without_model(monkeypatch, tmp_path) -> None:
 
     assert result["decision"] == "ESCALATE_DEGRADED"
     assert result["win_probability"] == 0.0
-    assert result["expected_value"] == -1245.0
+    assert result["expected_value"] == -1200.0
     assert "model_unavailable" in result["decision_reasoning"]
 
 
@@ -171,9 +171,9 @@ def test_scoring_agent_respects_expected_value_threshold(
     assert result["expected_value"] < 10000
 
 
-def test_scoring_agent_converts_response_cost_to_case_currency(monkeypatch) -> None:
+def test_scoring_agent_uses_native_response_cost_for_case_currency(monkeypatch) -> None:
     monkeypatch.setenv("RESPONSE_COST_USD", "15")
-    monkeypatch.setenv("RESPONSE_COST_FX_RATES", "USD:1,INR:83")
+    monkeypatch.setenv("RESPONSE_COST_INR", "1200")
     monkeypatch.setenv("FIGHT_EV_THRESHOLD", "0")
     monkeypatch.setattr(
         "agents.scoring._predict_win_probability",
@@ -191,5 +191,5 @@ def test_scoring_agent_converts_response_cost_to_case_currency(monkeypatch) -> N
     inr_result = scoring_agent(inr_state)
 
     assert usd_result["expected_value"] == 485.0
-    assert inr_result["expected_value"] == 40_255.0
-    assert inr_result["expected_value"] == usd_result["expected_value"] * 83
+    assert inr_result["expected_value"] == 40_300.0
+    assert inr_result["expected_value"] != 41_485.0

@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 from agents.contradiction import contradictions_from_state
-from core.currency import convert_currency
+from core.config import response_cost_for_currency
 from core.state import ChargebackState
 from ml.model import WinProbabilityModel
 from ml.subscores import subscores_from_state
@@ -63,8 +63,7 @@ def scoring_agent(state: ChargebackState) -> ChargebackState:
             logger.exception("Unable to calculate model-backed evidence sub-scores")
 
     contradictions = contradictions_from_state(state)
-    response_cost = _float_env("RESPONSE_COST_USD", 15.0)
-    response_cost = convert_currency(response_cost, "USD", state["currency"])
+    response_cost = response_cost_for_currency(state["currency"])
     fight_threshold = _float_env("FIGHT_EV_THRESHOLD", 0.0)
     expected_value = round((win_probability * state["dispute_amount"]) - response_cost, 2)
     is_degraded = state.get("evidence_collection_degraded", False)
