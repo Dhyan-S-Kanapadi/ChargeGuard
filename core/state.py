@@ -26,8 +26,10 @@ class TransactionEvidence(TypedDict):
     device_id: str
     ip_address: str
     customer_email: str
+    shipping_address: NotRequired[str | dict]
     order_history_count: int
     previous_chargebacks: int
+    prior_transactions: NotRequired[list[dict]]
     raw: dict
 
 
@@ -124,6 +126,7 @@ class ChargebackState(TypedDict):
     identity_continuity: NotRequired[dict[str, float | str] | None]
     contradiction_flags: NotRequired[list[str]]
     contradiction_summary: NotRequired[Optional[str]]
+    compelling_evidence_3_0: NotRequired[dict]
     requires_human_review: NotRequired[bool]
     decision: Optional[Literal["FIGHT", "ACCEPT", "ESCALATE_DEGRADED"]]
     decision_reasoning: Optional[str]

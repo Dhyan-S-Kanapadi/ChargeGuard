@@ -79,6 +79,7 @@ def _strong_features() -> FeatureRow:
     return {
         "otp_verified": 1,
         "three_ds_authenticated": 1,
+        "compelling_evidence_3_0": 1,
         "customer_order_history": 20,
         "previous_chargebacks": 0,
         "delivery_confirmed": 1,

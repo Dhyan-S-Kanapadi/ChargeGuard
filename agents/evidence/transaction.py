@@ -1,5 +1,7 @@
 import logging
 import os
+import json
+from datetime import datetime, timezone
 from typing import Any
 
 from core.state import ChargebackState, TransactionEvidence
@@ -53,6 +55,124 @@ def _extract_customer(order: dict[str, Any], payment: dict[str, Any]) -> dict[st
     }
 
 
+def _prior_transactions(order: dict[str, Any]) -> list[dict[str, Any]]:
+    customer = order.get("customer") or {}
+    history = (
+        order.get("prior_transactions")
+        or customer.get("prior_transactions")
+        or customer.get("order_history")
+        or []
+    )
+    return [item for item in history if isinstance(item, dict)]
+
+
+def _parse_transaction_time(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=value.tzinfo or timezone.utc)
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value, tz=timezone.utc)
+    if isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed.replace(tzinfo=parsed.tzinfo or timezone.utc)
+    return None
+
+
+def _normalized_match_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        value = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return " ".join(str(value).strip().casefold().split())
+
+
+def _is_explicitly_undisputed(transaction: dict[str, Any]) -> bool:
+    if transaction.get("disputed") is False:
+        return True
+    return str(transaction.get("dispute_status") or "").strip().casefold() in {
+        "none",
+        "undisputed",
+        "clear",
+    }
+
+
+def _evaluate_compelling_evidence_3_0(state: ChargebackState) -> dict[str, Any]:
+    if state["card_network"] != "VISA" or state["reason_code"] != "10.4":
+        return {
+            "qualifies": False,
+            "matched_transactions": [],
+            "matched_fields": [],
+            "reason": "not_visa_10_4",
+        }
+
+    transaction = state.get("transaction") or {}
+    history = transaction.get("prior_transactions") or []
+    if not history:
+        return {
+            "qualifies": False,
+            "matched_transactions": [],
+            "matched_fields": [],
+            "reason": "order_history_unavailable",
+        }
+
+    reference_time = state.get("chargeback_received_at") or datetime.now(timezone.utc)
+    reference_time = reference_time.replace(tzinfo=reference_time.tzinfo or timezone.utc)
+    current_values = {
+        "device_id": transaction.get("device_id"),
+        "ip_address": transaction.get("ip_address"),
+        "email": transaction.get("customer_email"),
+        "shipping_address": transaction.get("shipping_address"),
+    }
+    matched_transactions: list[dict[str, Any]] = []
+    all_matched_fields: set[str] = set()
+    for prior in history:
+        transaction_time = _parse_transaction_time(
+            prior.get("transaction_at") or prior.get("created_at") or prior.get("paid_at")
+        )
+        if transaction_time is None or not _is_explicitly_undisputed(prior):
+            continue
+        age_days = (reference_time - transaction_time).days
+        if age_days < 120 or age_days > 365:
+            continue
+
+        prior_values = {
+            "device_id": prior.get("device_id"),
+            "ip_address": prior.get("ip_address"),
+            "email": prior.get("email") or prior.get("customer_email"),
+            "shipping_address": prior.get("shipping_address"),
+        }
+        matched_fields = [
+            field
+            for field, current_value in current_values.items()
+            if _normalized_match_value(current_value)
+            and _normalized_match_value(current_value)
+            == _normalized_match_value(prior_values[field])
+        ]
+        if len(matched_fields) < 2:
+            continue
+        all_matched_fields.update(matched_fields)
+        matched_transactions.append(
+            {
+                "transaction_id": str(
+                    prior.get("transaction_id") or prior.get("payment_id") or prior.get("id") or ""
+                ),
+                "transaction_at": transaction_time.isoformat(),
+                "age_days": age_days,
+                "matched_fields": matched_fields,
+            }
+        )
+
+    qualifies = len(matched_transactions) >= 2
+    return {
+        "qualifies": qualifies,
+        "matched_transactions": matched_transactions if qualifies else [],
+        "matched_fields": sorted(all_matched_fields) if qualifies else [],
+        "reason": "qualified" if qualifies else "insufficient_qualifying_transactions",
+    }
+
+
 def _extract_3ds_authenticated(payment: dict[str, Any]) -> bool:
     card = payment.get("card") or {}
     acquirer_data = payment.get("acquirer_data") or {}
@@ -97,8 +217,10 @@ def _empty_transaction_evidence(
         "device_id": "",
         "ip_address": "",
         "customer_email": "",
+        "shipping_address": "",
         "order_history_count": 0,
         "previous_chargebacks": 0,
+        "prior_transactions": [],
         "raw": {
             "source": "transaction_agent_empty",
             "error": error,
@@ -140,8 +262,10 @@ def _stub_order_response(state: ChargebackState) -> dict[str, Any]:
         "status": "paid",
         "customer": {
             "email": "customer@example.com",
+            "shipping_address": "12 Demo Road, Bengaluru",
             "order_history_count": 8,
             "previous_chargebacks": 0,
+            "prior_transactions": [],
         },
     }
 
@@ -168,8 +292,15 @@ def _build_transaction_evidence(
         "device_id": str(notes.get("device_id") or metadata.get("device_id") or ""),
         "ip_address": str(notes.get("ip_address") or metadata.get("ip_address") or ""),
         "customer_email": str(payment.get("email") or customer.get("email") or ""),
+        "shipping_address": (
+            order.get("shipping_address")
+            or customer.get("shipping_address")
+            or metadata.get("shipping_address")
+            or ""
+        ),
         "order_history_count": int(customer.get("order_history_count") or 0),
         "previous_chargebacks": int(customer.get("previous_chargebacks") or 0),
+        "prior_transactions": _prior_transactions(order),
         "raw": {
             "source": source,
             "payment": payment,
@@ -259,8 +390,10 @@ def transaction_agent(state: ChargebackState) -> ChargebackState:
             order,
             source=source,
         )
+        state["compelling_evidence_3_0"] = _evaluate_compelling_evidence_3_0(state)
     except Exception as exc:
         logger.exception("Transaction evidence collection failed")
         state["transaction"] = _empty_transaction_evidence(state, error=str(exc))
+        state["compelling_evidence_3_0"] = _evaluate_compelling_evidence_3_0(state)
 
     return state

@@ -24,6 +24,7 @@ def _synthetic_row(rng: random.Random) -> FeatureRow:
     return {
         "otp_verified": _bernoulli(rng, 0.68),
         "three_ds_authenticated": _bernoulli(rng, 0.65),
+        "compelling_evidence_3_0": _bernoulli(rng, 0.06),
         "customer_order_history": min(int(rng.expovariate(1 / 8)), 50),
         "previous_chargebacks": min(int(rng.expovariate(1 / 0.7)), 6),
         "delivery_confirmed": delivery_confirmed,
@@ -58,6 +59,7 @@ def _latent_win_score(row: FeatureRow, noise: float) -> float:
         -0.65
         + 0.75 * row["otp_verified"]
         + 0.95 * row["three_ds_authenticated"]
+        + 1.50 * row["compelling_evidence_3_0"]
         + 0.025 * min(row["customer_order_history"], 20)
         - 0.45 * row["previous_chargebacks"]
         + 0.85 * row["delivery_confirmed"]

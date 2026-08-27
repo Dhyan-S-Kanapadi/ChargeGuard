@@ -7,6 +7,7 @@ from core.shipping_status import categorize_shipping_status
 FEATURE_NAMES: Final[tuple[str, ...]] = (
     "otp_verified",
     "three_ds_authenticated",
+    "compelling_evidence_3_0",
     "customer_order_history",
     "previous_chargebacks",
     "delivery_confirmed",
@@ -92,6 +93,9 @@ def features_from_state(state: ChargebackState) -> dict[str, float | int]:
     features: dict[str, float | int] = {
         "otp_verified": int(bool(transaction.get("otp_verified"))),
         "three_ds_authenticated": int(bool(transaction.get("three_ds_authenticated"))),
+        "compelling_evidence_3_0": int(
+            bool((state.get("compelling_evidence_3_0") or {}).get("qualifies"))
+        ),
         "customer_order_history": min(max(int(transaction.get("order_history_count", 0)), 0), 50),
         "previous_chargebacks": max(int(transaction.get("previous_chargebacks", 0)), 0),
         "delivery_confirmed": int(shipping_status == "CONFIRMED_DELIVERED"),
