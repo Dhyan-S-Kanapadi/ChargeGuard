@@ -14,6 +14,7 @@ class MerchantProfile(TypedDict):
     freshdesk_domain: str
     average_order_value: float
     chargeback_history_count: int
+    transaction_volume_30d_by_network: NotRequired[dict[str, int]]
 
 
 class TransactionEvidence(TypedDict):

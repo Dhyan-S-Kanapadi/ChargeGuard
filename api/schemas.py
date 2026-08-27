@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -13,6 +13,20 @@ class MerchantCreate(BaseModel):
     freshdesk_domain: str = ""
     average_order_value: float = Field(default=0, ge=0)
     chargeback_history_count: int = Field(default=0, ge=0)
+    transaction_volume_30d_by_network: dict[
+        Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"],
+        Annotated[int, Field(ge=0)],
+    ] = Field(default_factory=dict)
+
+
+class MerchantDisputeRatio(BaseModel):
+    window_days: int
+    card_network: str
+    dispute_count: int
+    transaction_count: int | None
+    current_ratio_pct: float | None
+    threshold_pct: float | None
+    status: Literal["OK", "WARNING", "UNAVAILABLE", "UNCONFIGURED"]
 
 
 class MerchantResponse(BaseModel):
@@ -23,6 +37,8 @@ class MerchantResponse(BaseModel):
     shipping_provider: str | None = None
     average_order_value: float
     chargeback_history_count: int
+    transaction_volume_30d_by_network: dict[str, int]
+    merchant_dispute_ratio: dict[str, MerchantDisputeRatio]
 
 
 class ChargebackWebhookPayload(BaseModel):
@@ -77,6 +93,7 @@ class DisputeDetail(BaseModel):
     expected_value: float | None = None
     third_party_fraud_indicators: dict[str, float | str] | None = None
     identity_continuity: dict[str, float | str] | None = None
+    merchant_dispute_ratio: MerchantDisputeRatio | None = None
     error: str | None
     created_at: datetime
     updated_at: datetime
