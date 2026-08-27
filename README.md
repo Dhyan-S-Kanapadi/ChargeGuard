@@ -224,6 +224,34 @@ API_KEY=demo-key poetry run python scripts/demo.py
 
 The script creates one merchant and demonstrates the FIGHT, ACCEPT, and ESCALATE_DEGRADED decision paths, including the generated FIGHT rebuttal PDF path.
 
+## Testing
+
+1. Run the full automated suite:
+
+   ```bash
+   poetry run pytest -q
+   ```
+
+2. Run the manual API decision walkthrough for FIGHT, ACCEPT, and ESCALATE_DEGRADED. It requires a running server:
+
+   ```bash
+   bash scripts/demo.sh
+   ```
+
+3. Verify that real outcomes accumulate and trigger retraining. It also requires a running server; set `RETRAIN_RECORD_THRESHOLD=3` before starting it for a fast run:
+
+   ```bash
+   bash scripts/test_feedback_loop.sh
+   ```
+
+4. Run the model validity checks without a server. This performs synthetic cross-validation and feature ablation:
+
+   ```bash
+   poetry run python scripts/model_sanity_check.py
+   ```
+
+These checks confirm that the system is internally consistent and behaves sensibly. They do not establish accuracy against real-world fraud or chargeback outcomes; that requires real production filed-dispute data.
+
 ## API Usage
 
 ### Register A Merchant
