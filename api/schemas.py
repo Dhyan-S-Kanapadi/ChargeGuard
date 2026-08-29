@@ -105,6 +105,16 @@ class CaseSummaryResponse(BaseModel):
     human_review_summary: str
 
 
+class AssistantQuery(BaseModel):
+    question: str = Field(min_length=1, max_length=4000)
+    chargeback_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class AssistantResponse(BaseModel):
+    answer: str
+    based_on: dict[str, int | bool]
+
+
 class OutcomeUpdate(BaseModel):
     outcome: Literal["WIN", "LOSS"]
     reason: str | None = Field(default=None, max_length=2000)

@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+from api.assistant import router as assistant_router
 from api.disputes import router as disputes_router
 from api.merchants import router as merchants_router
 from api.stats import router as stats_router
@@ -15,6 +16,7 @@ app.include_router(webhooks_router)
 app.include_router(disputes_router)
 app.include_router(merchants_router)
 app.include_router(stats_router)
+app.include_router(assistant_router)
 
 
 def _model_loaded() -> bool:

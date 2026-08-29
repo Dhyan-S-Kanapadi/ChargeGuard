@@ -149,6 +149,10 @@ Defaults:
 - `RESPONSE_COST_USD=15.0`
 - `FIGHT_EV_THRESHOLD=0.0`
 
+### LLM Boundaries
+
+ChargeGuard has four additive LLM call sites: delivery photo verification, case summary, rebuttal narrative, and portfolio assistant. None influence `win_probability`, `expected_value`, or `decision`; those fields remain deterministic, auditable, and computed without LLM involvement.
+
 ## Getting Started
 
 ### Prerequisites
