@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from analytics.merchant_stats import merchant_dispute_ratio
 from api.auth import require_api_key
 from api.schemas import MerchantCreate, MerchantResponse
 from api.store import store
@@ -14,6 +15,8 @@ router = APIRouter(
 
 
 def _response(profile: MerchantProfile) -> MerchantResponse:
+    disputes = store.list_disputes()
+    configured_networks = profile.get("transaction_volume_30d_by_network", {})
     return MerchantResponse(
         merchant_id=profile["merchant_id"],
         name=profile["name"],
@@ -22,6 +25,11 @@ def _response(profile: MerchantProfile) -> MerchantResponse:
         shipping_provider=profile.get("shipping_provider"),
         average_order_value=profile["average_order_value"],
         chargeback_history_count=profile["chargeback_history_count"],
+        transaction_volume_30d_by_network=configured_networks,
+        merchant_dispute_ratio={
+            network: merchant_dispute_ratio(profile, disputes, network)
+            for network in configured_networks
+        },
     )
 
 

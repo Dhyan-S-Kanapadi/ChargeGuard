@@ -47,6 +47,8 @@ def route_decision(state: ChargebackState) -> Literal["FIGHT", "ACCEPT", "ESCALA
 def route_quality(state: ChargebackState) -> Literal["approved", "retry", "escalate"]:
     if state.get("quality_approved"):
         return "approved"
+    if state.get("quality_auto_fixable") is False:
+        return "escalate"
     if state.get("quality_loop_count", 0) >= 3:
         return "escalate"
     return "retry"

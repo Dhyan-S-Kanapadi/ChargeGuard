@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from agents.learning import learning_agent
+from analytics.merchant_stats import merchant_dispute_ratio
 from api.auth import require_api_key
 from api.schemas import DisputeDetail, DisputeSummary, OutcomeResponse, OutcomeUpdate
 from api.store import store
@@ -87,12 +88,18 @@ def get_dispute(
     if not include_raw:
         record["state"] = _redact_state(record["state"])
     state = record["state"]
+    merchant = state["merchant_profile"]
     return DisputeDetail(
         **record,
         win_probability=state.get("win_probability"),
         expected_value=state.get("expected_value"),
         third_party_fraud_indicators=state.get("third_party_fraud_indicators"),
         identity_continuity=state.get("identity_continuity"),
+        merchant_dispute_ratio=merchant_dispute_ratio(
+            merchant,
+            store.list_disputes(),
+            state["card_network"],
+        ),
     )
 
 

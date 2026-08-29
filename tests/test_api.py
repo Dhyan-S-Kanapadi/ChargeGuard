@@ -325,6 +325,32 @@ def test_webhook_rejects_past_deadline(client: TestClient) -> None:
     assert response.status_code == 422
 
 
+def test_dispute_ratio_uses_network_volume_and_configured_threshold(
+    configured_client: TestClient,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VISA_DISPUTE_RATIO_THRESHOLD_PCT", "0.1")
+    merchant = _merchant_payload()
+    merchant["transaction_volume_30d_by_network"] = {"VISA": 1000}
+    assert configured_client.post("/merchants", json=merchant).status_code == 201
+    assert configured_client.post("/webhook/chargeback", json=_webhook_payload()).status_code == 202
+
+    detail = configured_client.get("/disputes/cb_api_001").json()
+    merchant_detail = configured_client.get("/merchants/merchant_api_001").json()
+    expected_ratio = {
+        "window_days": 30,
+        "card_network": "VISA",
+        "dispute_count": 1,
+        "transaction_count": 1000,
+        "current_ratio_pct": 0.1,
+        "threshold_pct": 0.1,
+        "status": "WARNING",
+    }
+
+    assert detail["merchant_dispute_ratio"] == expected_ratio
+    assert merchant_detail["merchant_dispute_ratio"]["VISA"] == expected_ratio
+
+
 def test_outcome_endpoint_records_terminal_feedback(
     configured_client: TestClient,
     tmp_path,

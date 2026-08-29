@@ -1,0 +1,14 @@
+{
+  "UA02": {
+    "name": "Unauthorized Card-Not-Present Transaction",
+    "required_evidence": ["transaction", "device", "consortium"],
+    "evidence_priority": ["transaction", "device", "consortium"],
+    "key_arguments": [
+      "OTP or 3DS authentication documented",
+      "Device and transaction identity evidence documented",
+      "Consortium fraud-alert status documented"
+    ],
+    "win_rate_baseline": 0.62,
+    "filing_window_working_days": 7
+  }
+}

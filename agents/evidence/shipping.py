@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from core.state import ChargebackState, ShippingEvidence
+from core.shipping_status import categorize_shipping_status
 from integrations.delhivery import DelhiveryClient
 from integrations.shiprocket import ShiprocketClient
 
@@ -37,6 +38,7 @@ def _empty_shipping_evidence(
         "tracking_id": state.get("tracking_id", ""),
         "courier": "",
         "status": "UNKNOWN",
+        "status_category": "UNKNOWN",
         "delivered_at": None,
         "delivery_latitude": None,
         "delivery_longitude": None,
@@ -147,10 +149,12 @@ def _build_shipping_evidence(
     latitude, longitude = _extract_location(tracking)
     proof = _extract_proof(tracking)
 
+    status = str(tracking.get("status") or tracking.get("current_status") or "UNKNOWN")
     return {
         "tracking_id": str(tracking.get("tracking_id") or tracking.get("awb") or tracking.get("waybill") or ""),
         "courier": str(tracking.get("courier") or tracking.get("carrier") or ""),
-        "status": str(tracking.get("status") or tracking.get("current_status") or "UNKNOWN"),
+        "status": status,
+        "status_category": categorize_shipping_status(status),
         "delivered_at": _parse_datetime(tracking.get("delivered_at") or tracking.get("delivery_time")),
         "delivery_latitude": latitude,
         "delivery_longitude": longitude,

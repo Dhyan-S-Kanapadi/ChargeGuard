@@ -40,6 +40,16 @@ def _print_holdout_metrics(metadata_path: Path) -> None:
     )
 
 
+def _print_india_authentication_coefficients(model: WinProbabilityModel) -> None:
+    coefficients = _coefficient_map(model)
+    print("India authentication evidence coefficients (standardized logistic model):")
+    print(f"  otp_verified={coefficients['otp_verified']:+.6f}")
+    print(
+        "  three_ds_authenticated="
+        f"{coefficients['three_ds_authenticated']:+.6f}"
+    )
+
+
 def _cross_validate(count: int) -> None:
     rows, labels = generate_synthetic_dataset(count=count, seed=42)
     folds = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
@@ -69,9 +79,11 @@ def _strong_features() -> FeatureRow:
     return {
         "otp_verified": 1,
         "three_ds_authenticated": 1,
+        "compelling_evidence_3_0": 1,
         "customer_order_history": 20,
         "previous_chargebacks": 0,
         "delivery_confirmed": 1,
+        "shipping_status_encoded": 4,
         "gps_coordinates_present": 1,
         "signature_obtained": 1,
         "fraud_score": 5.0,
@@ -142,6 +154,7 @@ def main() -> int:
     model = WinProbabilityModel.load(args.model_path)
     print(f"Loaded model: {args.model_path} ({model.training_record_count} training rows)")
     _print_holdout_metrics(Path(os.getenv("TRAINING_METADATA_PATH", DEFAULT_METADATA_PATH)))
+    _print_india_authentication_coefficients(model)
     _cross_validate(args.synthetic_count)
     ablation_passed = _run_feature_ablation(model)
     print(

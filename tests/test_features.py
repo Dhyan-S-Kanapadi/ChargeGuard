@@ -70,16 +70,16 @@ def test_missing_evidence_uses_safe_defaults() -> None:
 
 
 def test_amount_buckets_are_stable() -> None:
-    assert bucket_amount(999.99) == 0
-    assert bucket_amount(1000) == 1
-    assert bucket_amount(5000) == 2
-    assert bucket_amount(10000) == 3
+    assert bucket_amount(999.99, "INR") == 0
+    assert bucket_amount(1000, "INR") == 1
+    assert bucket_amount(5000, "INR") == 2
+    assert bucket_amount(10000, "INR") == 3
 
 
-def test_amount_buckets_normalize_currency(monkeypatch) -> None:
-    monkeypatch.setenv("RESPONSE_COST_FX_RATES", "USD:1,INR:83")
-
+def test_amount_buckets_use_explicit_currency_scales() -> None:
     assert bucket_amount(1000, "USD") == bucket_amount(83_000, "INR")
+    assert bucket_amount(11.99, "USD") == 0
+    assert bucket_amount(12.05, "USD") == 1
 
     usd_state = {
         "chargeback_id": "cb_features_usd",
@@ -101,3 +101,37 @@ def test_amount_buckets_normalize_currency(monkeypatch) -> None:
         features_from_state(usd_state)["dispute_amount_bucket"]
         == features_from_state(inr_state)["dispute_amount_bucket"]
     )
+
+
+def test_amount_buckets_reject_unknown_currency() -> None:
+    try:
+        bucket_amount(1000, "EUR")
+    except ValueError as exc:
+        assert "Unsupported dispute currency: EUR" in str(exc)
+    else:
+        raise AssertionError("unsupported currencies must not be bucketed silently")
+
+
+def test_shipping_statuses_are_distinct_scoring_features() -> None:
+    base_state = {
+        "chargeback_id": "cb_shipping_status",
+        "reason_code": "13.1",
+        "card_network": "VISA",
+        "dispute_amount": 2500.0,
+        "currency": "INR",
+        "filing_deadline": datetime(2026, 7, 1, tzinfo=timezone.utc),
+        "merchant_profile": {},
+    }
+
+    in_transit = features_from_state(
+        {**base_state, "shipping": {"status": "IN TRANSIT"}}
+    )
+    lost = features_from_state({**base_state, "shipping": {"status": "LOST"}})
+    returned = features_from_state(
+        {**base_state, "shipping": {"status": "RTO DELIVERED"}}
+    )
+
+    assert in_transit["shipping_status_encoded"] == 3
+    assert lost["shipping_status_encoded"] == 0
+    assert returned["shipping_status_encoded"] == 1
+    assert in_transit != lost != returned

@@ -133,15 +133,29 @@ def test_scoring_agent_uses_trained_model(
     assert "logistic_regression" in result["decision_reasoning"]
 
 
-def test_scoring_agent_escalates_without_model(monkeypatch, tmp_path) -> None:
+def test_scoring_agent_escalates_without_model(monkeypatch, tmp_path, caplog) -> None:
     monkeypatch.setenv("MODEL_PATH", str(tmp_path / "missing.pkl"))
 
     result = scoring_agent(_state())
 
     assert result["decision"] == "ESCALATE_DEGRADED"
+    assert result["requires_human_review"] is True
     assert result["win_probability"] == 0.0
-    assert result["expected_value"] == -1245.0
+    assert result["expected_value"] == -1200.0
     assert "model_unavailable" in result["decision_reasoning"]
+    assert "human review required" in caplog.text
+
+
+def test_scoring_agent_escalates_for_corrupt_model(monkeypatch, tmp_path) -> None:
+    corrupt_model = tmp_path / "corrupt.pkl"
+    corrupt_model.write_text("not a model", encoding="utf-8")
+    monkeypatch.setenv("MODEL_PATH", str(corrupt_model))
+
+    result = scoring_agent(_state())
+
+    assert result["decision"] == "ESCALATE_DEGRADED"
+    assert result["requires_human_review"] is True
+    assert "model_error" in result["decision_reasoning"]
 
 
 def test_scoring_agent_escalates_when_evidence_is_degraded(monkeypatch, trained_model_path: str) -> None:
@@ -171,9 +185,9 @@ def test_scoring_agent_respects_expected_value_threshold(
     assert result["expected_value"] < 10000
 
 
-def test_scoring_agent_converts_response_cost_to_case_currency(monkeypatch) -> None:
+def test_scoring_agent_uses_native_response_cost_for_case_currency(monkeypatch) -> None:
     monkeypatch.setenv("RESPONSE_COST_USD", "15")
-    monkeypatch.setenv("RESPONSE_COST_FX_RATES", "USD:1,INR:83")
+    monkeypatch.setenv("RESPONSE_COST_INR", "1200")
     monkeypatch.setenv("FIGHT_EV_THRESHOLD", "0")
     monkeypatch.setattr(
         "agents.scoring._predict_win_probability",
@@ -191,5 +205,5 @@ def test_scoring_agent_converts_response_cost_to_case_currency(monkeypatch) -> N
     inr_result = scoring_agent(inr_state)
 
     assert usd_result["expected_value"] == 485.0
-    assert inr_result["expected_value"] == 40_255.0
-    assert inr_result["expected_value"] == usd_result["expected_value"] * 83
+    assert inr_result["expected_value"] == 40_300.0
+    assert inr_result["expected_value"] != 41_485.0

@@ -1,6 +1,8 @@
 from datetime import datetime
 from typing import Literal, NotRequired, Optional, TypedDict
 
+from core.shipping_status import ShippingStatusCategory
+
 
 class MerchantProfile(TypedDict):
     merchant_id: str
@@ -12,6 +14,7 @@ class MerchantProfile(TypedDict):
     freshdesk_domain: str
     average_order_value: float
     chargeback_history_count: int
+    transaction_volume_30d_by_network: NotRequired[dict[str, int]]
 
 
 class TransactionEvidence(TypedDict):
@@ -24,8 +27,10 @@ class TransactionEvidence(TypedDict):
     device_id: str
     ip_address: str
     customer_email: str
+    shipping_address: NotRequired[str | dict]
     order_history_count: int
     previous_chargebacks: int
+    prior_transactions: NotRequired[list[dict]]
     raw: dict
 
 
@@ -33,6 +38,7 @@ class ShippingEvidence(TypedDict):
     tracking_id: str
     courier: str
     status: str
+    status_category: ShippingStatusCategory
     delivered_at: Optional[datetime]
     delivery_latitude: Optional[float]
     delivery_longitude: Optional[float]
@@ -121,6 +127,8 @@ class ChargebackState(TypedDict):
     identity_continuity: NotRequired[dict[str, float | str] | None]
     contradiction_flags: NotRequired[list[str]]
     contradiction_summary: NotRequired[Optional[str]]
+    compelling_evidence_3_0: NotRequired[dict]
+    requires_human_review: NotRequired[bool]
     decision: Optional[Literal["FIGHT", "ACCEPT", "ESCALATE_DEGRADED"]]
     decision_reasoning: Optional[str]
 
@@ -128,6 +136,8 @@ class ChargebackState(TypedDict):
     rebuttal_document_path: Optional[str]
     quality_approved: bool
     quality_rejection_reason: Optional[str]
+    quality_rejection_details: NotRequired[dict]
+    quality_auto_fixable: NotRequired[bool]
     quality_loop_count: int
     filing_confirmation: Optional[str]
     filed_at: Optional[datetime]

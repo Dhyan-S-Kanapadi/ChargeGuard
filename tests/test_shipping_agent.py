@@ -61,6 +61,7 @@ def test_shipping_agent_populates_only_shipping_evidence(monkeypatch) -> None:
     assert result["shipping"]["tracking_id"] == "trk_demo_001"
     assert result["shipping"]["courier"] == "Shiprocket"
     assert result["shipping"]["status"] == "DELIVERED"
+    assert result["shipping"]["status_category"] == "CONFIRMED_DELIVERED"
     assert result["shipping"]["delivery_latitude"] == 12.9716
     assert result["shipping"]["signature_obtained"] is True
     assert result["transaction"] is None
@@ -88,6 +89,7 @@ def test_shipping_builder_accepts_provider_payload_variants() -> None:
     assert evidence["tracking_id"] == "awb_variant_001"
     assert evidence["courier"] == "Delhivery"
     assert evidence["status"] == "Delivered"
+    assert evidence["status_category"] == "CONFIRMED_DELIVERED"
     assert evidence["delivered_at"] is not None
     assert evidence["delivered_at"].tzinfo is not None
     assert evidence["delivery_latitude"] == 19.076
@@ -132,6 +134,7 @@ def test_shipping_agent_records_empty_evidence_on_collection_failure(monkeypatch
 
     assert result["shipping"] is not None
     assert result["shipping"]["status"] == "UNKNOWN"
+    assert result["shipping"]["status_category"] == "UNKNOWN"
     assert result["shipping"]["signature_obtained"] is False
     assert result["shipping"]["raw"]["source"] == "shipping_agent_empty"
     assert result["shipping"]["raw"]["error"] == "carrier unavailable"

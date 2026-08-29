@@ -124,3 +124,21 @@ def test_rebuttal_pdf_is_deterministic(tmp_path, monkeypatch) -> None:
     second_path = Path(rebuttal_builder_agent(_state())["rebuttal_document_path"])
 
     assert first_path.read_bytes() == second_path.read_bytes()
+
+
+def test_rebuttal_retry_removes_prohibited_language(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(tmp_path))
+    state = _state()
+    state["decision_reasoning"] = "We accept liability due to merchant error."
+
+    first_path = Path(rebuttal_builder_agent(state)["rebuttal_document_path"])
+    first_packet = first_path.with_suffix(".json").read_text(encoding="utf-8")
+    state["quality_rejection_reason"] = "prohibited_language_used"
+    state["quality_loop_count"] = 1
+    second_path = Path(rebuttal_builder_agent(state)["rebuttal_document_path"])
+    second_packet = second_path.with_suffix(".json").read_text(encoding="utf-8")
+
+    assert second_packet != first_packet
+    assert "we accept liability" not in second_packet.lower()
+    assert "merchant error" not in second_packet.lower()
+    assert '"reason": "prohibited_language_used"' in second_packet
