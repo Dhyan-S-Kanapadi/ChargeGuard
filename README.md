@@ -397,6 +397,10 @@ Evidence agents are built to prefer the configured merchant provider and fall ba
 
 When `CHARGEGUARD_USE_STUBS=true`, deterministic evidence is returned for local development and repeatable tests.
 
+## Testing Against Real Providers
+
+`CHARGEGUARD_USE_STUBS` is the global default: set it to `true` to use stubs everywhere. To test one provider without changing the others, set that provider's `*_USE_STUBS=false` override and provide its real credentials; unset overrides continue to follow the global setting. Start with Razorpay sandbox test-mode keys from the Razorpay dashboard, which do not move real money, before attempting a live run across multiple providers.
+
 ## Generated Outputs
 
 Rebuttal PDFs are written to:

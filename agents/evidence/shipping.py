@@ -5,8 +5,8 @@ from typing import Any
 
 from core.state import ChargebackState, ShippingEvidence
 from core.shipping_status import categorize_shipping_status
-from integrations.delhivery import DelhiveryClient
-from integrations.shiprocket import ShiprocketClient
+from integrations.delhivery import DelhiveryClient, DelhiveryConfigError
+from integrations.shiprocket import ShiprocketClient, ShiprocketConfigError
 
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,14 @@ def _bool_from_any(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "y", "signed", "obtained"}
     return bool(value)
+
+
+def _shipping_use_stubs(state: ChargebackState, provider: str) -> bool:
+    override_name = "DELHIVERY_USE_STUBS" if provider == "delhivery" else "SHIPROCKET_USE_STUBS"
+    value = os.getenv(override_name)
+    if value is None:
+        return _env_flag("CHARGEGUARD_USE_STUBS")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _empty_shipping_evidence(
@@ -243,9 +251,6 @@ def _collect_delhivery(state: ChargebackState) -> dict[str, Any]:
 
 
 def _collect_shipping_data(state: ChargebackState) -> tuple[dict[str, Any], str]:
-    if _env_flag("CHARGEGUARD_USE_STUBS"):
-        return _stub_tracking_response(state), "shipping_agent_stub"
-
     primary = state["merchant_profile"].get("shipping_provider", "shiprocket")
     collectors = {
         "shiprocket": _collect_shiprocket,
@@ -253,14 +258,22 @@ def _collect_shipping_data(state: ChargebackState) -> tuple[dict[str, Any], str]
     }
     if primary not in collectors:
         raise ValueError(f"Unsupported shipping provider: {primary}")
+    if _shipping_use_stubs(state, primary):
+        return _stub_tracking_response(state), "shipping_agent_stub"
 
     fallback = "delhivery" if primary == "shiprocket" else "shiprocket"
     try:
         return collectors[primary](state), primary
+    except (ShiprocketConfigError, DelhiveryConfigError):
+        raise
     except Exception as primary_error:
         logger.warning("%s shipping collection failed: %s", primary, primary_error)
         try:
+            if _shipping_use_stubs(state, fallback):
+                return _stub_tracking_response(state), f"{fallback}_stub"
             return collectors[fallback](state), fallback
+        except (ShiprocketConfigError, DelhiveryConfigError):
+            raise
         except Exception as fallback_error:
             raise ShippingCollectionError(
                 f"{primary} failed: {primary_error}; {fallback} failed: {fallback_error}"
@@ -273,6 +286,15 @@ def shipping_agent(state: ChargebackState) -> ChargebackState:
     try:
         tracking, source = _collect_shipping_data(state)
         state["shipping"] = _build_shipping_evidence(tracking, source=source)
+    except (ShiprocketConfigError, DelhiveryConfigError) as exc:
+        provider = state["merchant_profile"].get("shipping_provider", "shiprocket")
+        logger.warning("%s credentials are unavailable: %s", provider, exc)
+        state["shipping"] = _empty_shipping_evidence(state, error=str(exc))
+        state["evidence_collection_degraded"] = True
+        degraded_reasons = state.setdefault("degraded_reasons", [])
+        reason = f"{provider}_credentials_missing"
+        if reason not in degraded_reasons:
+            degraded_reasons.append(reason)
     except Exception as exc:
         logger.exception("Shipping evidence collection failed")
         state["shipping"] = _empty_shipping_evidence(state, error=str(exc))

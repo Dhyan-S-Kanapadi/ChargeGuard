@@ -3,8 +3,8 @@ import os
 from typing import Any
 
 from core.state import ChargebackState, ConsortiumEvidence
-from integrations.ethoca import EthocaClient
-from integrations.verifi import VerifiClient
+from integrations.ethoca import EthocaClient, EthocaConfigError
+from integrations.verifi import VerifiClient, VerifiConfigError
 
 
 logger = logging.getLogger(__name__)
@@ -14,6 +14,14 @@ def _env_flag(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
         return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _consortium_use_stubs(provider: str) -> bool:
+    override_name = "ETHOCA_USE_STUBS" if provider == "ethoca" else "VERIFI_USE_STUBS"
+    value = os.getenv(override_name)
+    if value is None:
+        return _env_flag("CHARGEGUARD_USE_STUBS")
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -113,33 +121,53 @@ def _lookup_identifiers(state: ChargebackState) -> dict[str, str]:
 
 
 def _collect_consortium_data(state: ChargebackState) -> dict[str, Any]:
-    if _env_flag("CHARGEGUARD_USE_STUBS"):
+    if _consortium_use_stubs("ethoca") and _consortium_use_stubs("verifi"):
         return _stub_consortium_response(state)
 
     identifiers = _lookup_identifiers(state)
     errors: dict[str, str] = {}
+    degraded_reasons: list[str] = []
     completed = 0
-    try:
-        ethoca = EthocaClient.from_env().search_alerts(identifiers)
+    if _consortium_use_stubs("ethoca"):
+        ethoca = {"match": False}
         completed += 1
-    except Exception as exc:
-        logger.warning("Ethoca lookup failed: %s", exc)
-        ethoca = {}
-        errors["ethoca"] = str(exc)
+    else:
+        try:
+            ethoca = EthocaClient.from_env().search_alerts(identifiers)
+            completed += 1
+        except EthocaConfigError as exc:
+            logger.warning("Ethoca credentials are unavailable: %s", exc)
+            ethoca = {}
+            errors["ethoca"] = str(exc)
+            degraded_reasons.append("ethoca_credentials_missing")
+        except Exception as exc:
+            logger.warning("Ethoca lookup failed: %s", exc)
+            ethoca = {}
+            errors["ethoca"] = str(exc)
 
-    try:
-        verifi = VerifiClient.from_env().search_alerts(identifiers)
+    if _consortium_use_stubs("verifi"):
+        verifi = {"match": False}
         completed += 1
-    except Exception as exc:
-        logger.warning("Verifi lookup failed: %s", exc)
-        verifi = {}
-        errors["verifi"] = str(exc)
+    else:
+        try:
+            verifi = VerifiClient.from_env().search_alerts(identifiers)
+            completed += 1
+        except VerifiConfigError as exc:
+            logger.warning("Verifi credentials are unavailable: %s", exc)
+            verifi = {}
+            errors["verifi"] = str(exc)
+            degraded_reasons.append("verifi_credentials_missing")
+        except Exception as exc:
+            logger.warning("Verifi lookup failed: %s", exc)
+            verifi = {}
+            errors["verifi"] = str(exc)
 
     return {
         "lookup_complete": completed == 2,
         "ethoca": ethoca,
         "verifi": verifi,
         "source_errors": errors,
+        "degraded_reasons": degraded_reasons,
     }
 
 
@@ -149,6 +177,11 @@ def consortium_agent(state: ChargebackState) -> ChargebackState:
     try:
         response = _collect_consortium_data(state)
         state["consortium"] = _build_consortium_evidence(response)
+        for reason in response.get("degraded_reasons", []):
+            state["evidence_collection_degraded"] = True
+            degraded_reasons = state.setdefault("degraded_reasons", [])
+            if reason not in degraded_reasons:
+                degraded_reasons.append(reason)
     except Exception as exc:
         logger.exception("Consortium evidence collection failed")
         state["consortium"] = _empty_consortium_evidence(state, error=str(exc))

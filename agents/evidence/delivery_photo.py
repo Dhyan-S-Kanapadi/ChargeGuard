@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core.state import ChargebackState, DeliveryPhotoEvidence
-from integrations.claude_vision import ClaudeVisionClient
-from integrations.food_platform import FoodPlatformClient
+from integrations.claude_vision import ClaudeVisionClient, ClaudeVisionConfigError
+from integrations.food_platform import FoodPlatformClient, FoodPlatformConfigError
 
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,13 @@ def _env_flag(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
         return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _claude_vision_use_stubs() -> bool:
+    value = os.getenv("CLAUDE_VISION_USE_STUBS")
+    if value is None:
+        return _env_flag("CHARGEGUARD_USE_STUBS")
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -84,7 +91,7 @@ def _platform_photo_response(state: ChargebackState) -> dict[str, Any]:
 
 
 def _collect_delivery_photo_data(state: ChargebackState) -> tuple[dict[str, Any], str]:
-    if _env_flag("CHARGEGUARD_USE_STUBS"):
+    if _claude_vision_use_stubs():
         return _stub_photo_verification_response(state), "delivery_photo_agent_stub"
 
     context = _shipping_context(state)
@@ -149,6 +156,20 @@ def delivery_photo_agent(state: ChargebackState) -> ChargebackState:
     try:
         response, source = _collect_delivery_photo_data(state)
         state["delivery_photo"] = _build_delivery_photo_evidence(response, source=source)
+    except ClaudeVisionConfigError as exc:
+        logger.warning("Claude Vision credentials are unavailable: %s", exc)
+        state["delivery_photo"] = _empty_delivery_photo_evidence(state, error=str(exc))
+        state["evidence_collection_degraded"] = True
+        degraded_reasons = state.setdefault("degraded_reasons", [])
+        if "claude_vision_credentials_missing" not in degraded_reasons:
+            degraded_reasons.append("claude_vision_credentials_missing")
+    except FoodPlatformConfigError as exc:
+        logger.warning("Food platform credentials are unavailable: %s", exc)
+        state["delivery_photo"] = _empty_delivery_photo_evidence(state, error=str(exc))
+        state["evidence_collection_degraded"] = True
+        degraded_reasons = state.setdefault("degraded_reasons", [])
+        if "food_platform_credentials_missing" not in degraded_reasons:
+            degraded_reasons.append("food_platform_credentials_missing")
     except Exception as exc:
         logger.exception("Delivery photo evidence collection failed")
         state["delivery_photo"] = _empty_delivery_photo_evidence(state, error=str(exc))
