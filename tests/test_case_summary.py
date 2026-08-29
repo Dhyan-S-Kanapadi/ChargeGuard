@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
+import json
 from typing import cast
 
+import httpx
 from fastapi.testclient import TestClient
 
 from agents import escalation
@@ -8,6 +10,7 @@ from agents.escalation import human_escalation_agent
 from api.store import store
 from core.state import ChargebackState
 from main import app
+from integrations.case_summary import CaseSummaryClient
 
 
 def _state(decision: str = "ESCALATE_DEGRADED") -> ChargebackState:
@@ -58,6 +61,34 @@ def test_degraded_escalation_populates_stubbed_summary(monkeypatch) -> None:
     assert result["final_outcome"] == "PENDING"
     assert result["human_review_summary"] is not None
     assert "Evidence collection is degraded because of device" in result["human_review_summary"]
+
+
+def test_case_summary_client_uses_a_constrained_summary_tool() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["tool_choice"] == {"type": "tool", "name": "return_case_summary"}
+        assert payload["tools"][0]["input_schema"]["required"] == ["summary"]
+        return httpx.Response(
+            200,
+            json={
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "return_case_summary",
+                        "input": {"summary": "Evidence is incomplete and needs review."},
+                    }
+                ]
+            },
+        )
+
+    client = CaseSummaryClient(
+        api_key="test-key",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert client.summarize_case({"evidence_status": {"transaction": True}}) == (
+        "Evidence is incomplete and needs review."
+    )
 
 
 def test_non_degraded_decisions_do_not_generate_automatic_summary(monkeypatch) -> None:

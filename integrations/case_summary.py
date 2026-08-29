@@ -1,6 +1,7 @@
 """Bounded, optional plain-English summaries for human case review."""
 
 import os
+import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -94,7 +95,22 @@ class CaseSummaryClient:
                 "evidence, missing or degraded evidence, and why a human must decide. "
                 "Return only the summary text, not JSON or headings."
             ),
-            "messages": [{"role": "user", "content": str(facts)}],
+            "tools": [
+                {
+                    "name": "return_case_summary",
+                    "description": "Return the bounded human-review case summary.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "summary": {"type": "string", "minLength": 1},
+                        },
+                        "required": ["summary"],
+                        "additionalProperties": False,
+                    },
+                }
+            ],
+            "tool_choice": {"type": "tool", "name": "return_case_summary"},
+            "messages": [{"role": "user", "content": json.dumps(facts, default=str)}],
         }
         if self._client is not None:
             response = self._send_request(self._client, payload)
@@ -127,6 +143,11 @@ class CaseSummaryClient:
         content = response.get("content")
         if not isinstance(content, list):
             raise CaseSummaryRequestError("Case summary response did not include content.")
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "tool_use":
+                summary = item.get("input", {}).get("summary")
+                if isinstance(summary, str) and summary.strip():
+                    return summary.strip()
         text = "".join(
             item.get("text", "")
             for item in content
