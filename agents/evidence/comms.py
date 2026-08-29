@@ -5,8 +5,8 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 
 from core.state import ChargebackState, CommsEvidence
-from integrations.freshdesk import FreshdeskClient
-from integrations.gmail_reader import GmailReader
+from integrations.freshdesk import FreshdeskClient, FreshdeskConfigError
+from integrations.gmail_reader import GmailConfigError, GmailReader
 
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,14 @@ def _env_flag(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
         return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _comms_use_stubs(provider: str) -> bool:
+    override_name = "GMAIL_USE_STUBS" if provider == "gmail" else "FRESHDESK_USE_STUBS"
+    value = os.getenv(override_name)
+    if value is None:
+        return _env_flag("CHARGEGUARD_USE_STUBS")
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -182,23 +190,37 @@ def _build_comms_evidence(
 def _collect_communications(
     state: ChargebackState,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
-    if _env_flag("CHARGEGUARD_USE_STUBS"):
+    if _comms_use_stubs("gmail") and _comms_use_stubs("freshdesk"):
         return _stub_email_response(state), [], {}
 
     errors: dict[str, str] = {}
-    try:
-        emails = _collect_gmail(state)
-    except Exception as exc:
-        logger.warning("Gmail evidence collection failed: %s", exc)
-        emails = []
-        errors["gmail"] = str(exc)
+    if _comms_use_stubs("gmail"):
+        emails = _stub_email_response(state)
+    else:
+        try:
+            emails = _collect_gmail(state)
+        except GmailConfigError as exc:
+            logger.warning("Gmail credentials are unavailable: %s", exc)
+            emails = []
+            errors["gmail_credentials_missing"] = str(exc)
+        except Exception as exc:
+            logger.warning("Gmail evidence collection failed: %s", exc)
+            emails = []
+            errors["gmail"] = str(exc)
 
-    try:
-        tickets = _collect_freshdesk(state)
-    except Exception as exc:
-        logger.warning("Freshdesk evidence collection failed: %s", exc)
+    if _comms_use_stubs("freshdesk"):
         tickets = []
-        errors["freshdesk"] = str(exc)
+    else:
+        try:
+            tickets = _collect_freshdesk(state)
+        except FreshdeskConfigError as exc:
+            logger.warning("Freshdesk credentials are unavailable: %s", exc)
+            tickets = []
+            errors["freshdesk_credentials_missing"] = str(exc)
+        except Exception as exc:
+            logger.warning("Freshdesk evidence collection failed: %s", exc)
+            tickets = []
+            errors["freshdesk"] = str(exc)
     return emails, tickets, errors
 
 
@@ -213,6 +235,12 @@ def comms_agent(state: ChargebackState) -> ChargebackState:
             tickets,
             source_errors=errors,
         )
+        for reason in ("gmail_credentials_missing", "freshdesk_credentials_missing"):
+            if reason in errors:
+                state["evidence_collection_degraded"] = True
+                degraded_reasons = state.setdefault("degraded_reasons", [])
+                if reason not in degraded_reasons:
+                    degraded_reasons.append(reason)
     except Exception as exc:
         logger.exception("Communication evidence processing failed")
         state["comms"] = {

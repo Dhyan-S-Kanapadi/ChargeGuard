@@ -4,7 +4,7 @@ import os
 from typing import Any
 
 from core.state import ChargebackState, DeviceEvidence
-from integrations.seon import SeonClient
+from integrations.seon import SeonClient, SeonConfigError
 
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,13 @@ def _transaction_context(state: ChargebackState) -> dict[str, Any]:
         "ip_address": transaction.get("ip_address", ""),
         "customer_email": transaction.get("customer_email", ""),
     }
+
+
+def _device_use_stubs() -> bool:
+    value = os.getenv("SEON_USE_STUBS")
+    if value is None:
+        return _env_flag("CHARGEGUARD_USE_STUBS")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _stub_device_risk_response(state: ChargebackState) -> dict[str, Any]:
@@ -157,7 +164,7 @@ def _collect_seon(state: ChargebackState) -> dict[str, Any]:
 
 
 def _collect_device_data(state: ChargebackState) -> tuple[dict[str, Any], str]:
-    if _env_flag("CHARGEGUARD_USE_STUBS"):
+    if _device_use_stubs():
         return _stub_device_risk_response(state), "device_agent_stub"
     return _collect_seon(state), "seon"
 
@@ -168,6 +175,13 @@ def device_agent(state: ChargebackState) -> ChargebackState:
     try:
         risk, source = _collect_device_data(state)
         state["device"] = _build_device_evidence(risk, state=state, source=source)
+    except SeonConfigError as exc:
+        logger.warning("SEON credentials are unavailable: %s", exc)
+        state["device"] = None
+        state["evidence_collection_degraded"] = True
+        degraded_reasons = state.setdefault("degraded_reasons", [])
+        if "seon_credentials_missing" not in degraded_reasons:
+            degraded_reasons.append("seon_credentials_missing")
     except Exception as exc:
         logger.exception("Device evidence collection failed: %s", exc)
         state["device"] = None

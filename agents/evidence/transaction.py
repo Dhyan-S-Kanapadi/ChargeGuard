@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core.state import ChargebackState, TransactionEvidence
-from integrations.razorpay import RazorpayClient
-from integrations.stripe import StripeClient
+from integrations.razorpay import RazorpayClient, RazorpayConfigError
+from integrations.stripe import StripeClient, StripeConfigError
 
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,15 @@ def _payment_provider(state: ChargebackState) -> str:
     if configured:
         return configured
     return "razorpay" if state["currency"].upper() == "INR" else "stripe"
+
+
+def _transaction_use_stubs(state: ChargebackState) -> bool:
+    provider = _payment_provider(state)
+    override_name = "STRIPE_USE_STUBS" if provider == "stripe" else "RAZORPAY_USE_STUBS"
+    value = os.getenv(override_name)
+    if value is None:
+        return _env_flag("CHARGEGUARD_USE_STUBS")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _bool_from_any(value: Any) -> bool:
@@ -366,7 +375,7 @@ def _collect_stripe(state: ChargebackState) -> tuple[dict[str, Any], dict[str, A
 def _collect_transaction_data(
     state: ChargebackState,
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
-    if _env_flag("CHARGEGUARD_USE_STUBS"):
+    if _transaction_use_stubs(state):
         return _stub_payment_response(state), _stub_order_response(state), "transaction_agent_stub"
 
     provider = _payment_provider(state)
@@ -391,6 +400,16 @@ def transaction_agent(state: ChargebackState) -> ChargebackState:
             source=source,
         )
         state["compelling_evidence_3_0"] = _evaluate_compelling_evidence_3_0(state)
+    except (RazorpayConfigError, StripeConfigError) as exc:
+        provider = _payment_provider(state)
+        logger.warning("%s credentials are unavailable: %s", provider, exc)
+        state["transaction"] = _empty_transaction_evidence(state, error=str(exc))
+        state["compelling_evidence_3_0"] = _evaluate_compelling_evidence_3_0(state)
+        state["evidence_collection_degraded"] = True
+        degraded_reasons = state.setdefault("degraded_reasons", [])
+        reason = f"{provider}_credentials_missing"
+        if reason not in degraded_reasons:
+            degraded_reasons.append(reason)
     except Exception as exc:
         logger.exception("Transaction evidence collection failed")
         state["transaction"] = _empty_transaction_evidence(state, error=str(exc))

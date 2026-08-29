@@ -14,9 +14,8 @@ router = APIRouter(
 )
 
 
-@router.get("")
-def get_stats() -> dict[str, Any]:
-    records = store.list_disputes()
+def build_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate dispute records for both the stats endpoint and read-only assistant."""
     decisions = {"FIGHT": 0, "ACCEPT": 0, "ESCALATE_DEGRADED": 0}
     expected_values: list[float] = []
     filed_outcomes: list[str] = []
@@ -47,3 +46,8 @@ def get_stats() -> dict[str, Any]:
         ),
         "evidence_collection_degraded_count": degraded_count,
     }
+
+
+@router.get("")
+def get_stats() -> dict[str, Any]:
+    return build_stats(store.list_disputes())

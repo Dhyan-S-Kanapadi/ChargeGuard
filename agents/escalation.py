@@ -1,6 +1,7 @@
 import logging
 
 from core.state import ChargebackState
+from integrations.case_summary import generate_case_summary
 
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,12 @@ def human_escalation_agent(state: ChargebackState) -> ChargebackState:
             state["outcome_reason"] = f"Human review required after automated quality rejection: {rejection}"
         else:
             state["outcome_reason"] = "Human review required before filing."
+    if state.get("decision") == "ESCALATE_DEGRADED":
+        try:
+            state["human_review_summary"] = generate_case_summary(state)
+        except Exception as exc:
+            logger.warning("Case summary generation failed for %s: %s", state["chargeback_id"], exc)
+            state["human_review_summary"] = None
     logger.info(
         "Escalating chargeback %s for human review",
         state["chargeback_id"],

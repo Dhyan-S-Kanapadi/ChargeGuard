@@ -66,6 +66,40 @@ def test_transaction_agent_populates_only_transaction_evidence(monkeypatch) -> N
     assert result["device"] is None
 
 
+def test_transaction_provider_override_keeps_razorpay_stubbed(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "false")
+    monkeypatch.setenv("RAZORPAY_USE_STUBS", "true")
+
+    result = transaction_agent(_state())
+
+    assert result["transaction"] is not None
+    assert result["transaction"]["raw"]["source"] == "transaction_agent_stub"
+
+
+def test_transaction_live_override_marks_missing_credentials_degraded(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
+    monkeypatch.setenv("RAZORPAY_USE_STUBS", "false")
+    monkeypatch.delenv("RAZORPAY_KEY_ID", raising=False)
+    monkeypatch.delenv("RAZORPAY_KEY_SECRET", raising=False)
+
+    result = transaction_agent(_state())
+
+    assert result["transaction"] is not None
+    assert result["transaction"]["raw"]["source"] == "transaction_agent_empty"
+    assert result["evidence_collection_degraded"] is True
+    assert "razorpay_credentials_missing" in result["degraded_reasons"]
+
+
+def test_transaction_uses_global_stub_fallback_when_override_is_unset(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
+    monkeypatch.delenv("RAZORPAY_USE_STUBS", raising=False)
+
+    result = transaction_agent(_state())
+
+    assert result["transaction"] is not None
+    assert result["transaction"]["raw"]["source"] == "transaction_agent_stub"
+
+
 def test_transaction_builder_accepts_provider_payload_variants() -> None:
     state = _state()
     payment = {

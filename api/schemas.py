@@ -93,10 +93,26 @@ class DisputeDetail(BaseModel):
     expected_value: float | None = None
     third_party_fraud_indicators: dict[str, float | str] | None = None
     identity_continuity: dict[str, float | str] | None = None
+    human_review_summary: str | None = None
     merchant_dispute_ratio: MerchantDisputeRatio | None = None
     error: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class CaseSummaryResponse(BaseModel):
+    chargeback_id: str
+    human_review_summary: str
+
+
+class AssistantQuery(BaseModel):
+    question: str = Field(min_length=1, max_length=4000)
+    chargeback_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+class AssistantResponse(BaseModel):
+    answer: str
+    based_on: dict[str, int | bool]
 
 
 class OutcomeUpdate(BaseModel):

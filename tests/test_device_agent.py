@@ -79,6 +79,38 @@ def test_device_agent_populates_only_device_evidence(monkeypatch) -> None:
     assert result["comms"] is None
 
 
+def test_device_provider_override_keeps_seon_stubbed(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "false")
+    monkeypatch.setenv("SEON_USE_STUBS", "true")
+
+    result = device_agent(_state())
+
+    assert result["device"] is not None
+    assert result["device"]["raw"]["source"] == "device_agent_stub"
+
+
+def test_device_live_override_marks_missing_credentials_degraded(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
+    monkeypatch.setenv("SEON_USE_STUBS", "false")
+    monkeypatch.delenv("SEON_API_KEY", raising=False)
+
+    result = device_agent(_state())
+
+    assert result["device"] is None
+    assert result["evidence_collection_degraded"] is True
+    assert "seon_credentials_missing" in result["degraded_reasons"]
+
+
+def test_device_uses_global_stub_fallback_when_override_is_unset(monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
+    monkeypatch.delenv("SEON_USE_STUBS", raising=False)
+
+    result = device_agent(_state())
+
+    assert result["device"] is not None
+    assert result["device"]["raw"]["source"] == "device_agent_stub"
+
+
 def test_device_builder_accepts_provider_payload_variants() -> None:
     risk = {
         "score": 72,
