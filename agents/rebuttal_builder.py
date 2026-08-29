@@ -7,6 +7,10 @@ from typing import Any
 
 from core.state import ChargebackState
 from documents.pdf_builder import build_rebuttal_pdf
+from integrations.rebuttal_narrative import (
+    generate_rebuttal_narrative,
+    rebuttal_narrative_enabled,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -165,6 +169,7 @@ def _build_rebuttal_packet(state: ChargebackState) -> dict[str, Any]:
         "evidence_priority": playbook["evidence_priority"],
         "strongest_evidence": _strongest_evidence(state),
         "sections": _rebuttal_sections(state),
+        "narrative_generated": False,
         "evidence": {
             "transaction": state.get("transaction"),
             "shipping": state.get("shipping"),
@@ -217,6 +222,15 @@ def rebuttal_builder_agent(state: ChargebackState) -> ChargebackState:
     packet_path = pdf_path.with_suffix(".json")
 
     packet = _build_rebuttal_packet(state)
+    if rebuttal_narrative_enabled():
+        try:
+            narrative = generate_rebuttal_narrative(packet)
+            if state.get("quality_rejection_reason") == "prohibited_language_used":
+                narrative = _replace_prohibited_language(narrative)
+            packet["sections"].insert(0, {"title": "Summary", "body": narrative})
+            packet["narrative_generated"] = True
+        except Exception as exc:
+            logger.warning("Rebuttal narrative generation failed for %s: %s", state["chargeback_id"], exc)
     packet_path.write_text(
         json.dumps(packet, default=str, indent=2, sort_keys=True),
         encoding="utf-8",

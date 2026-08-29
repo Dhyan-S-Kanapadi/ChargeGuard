@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from agents.rebuttal_builder import _build_rebuttal_packet, rebuttal_builder_agent
+from agents.quality_check import quality_check_agent
 from core.state import ChargebackState
 
 
@@ -112,6 +113,62 @@ def test_rebuttal_builder_writes_pdf_and_fact_sidecar(tmp_path, monkeypatch) -> 
     packet = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
     assert packet["chargeback_id"] == "cb_rebuttal_001"
     assert packet["sections"][0]["title"] == "Dispute summary"
+    assert packet["narrative_generated"] is False
+
+
+def test_enabled_stubbed_narrative_is_first_packet_section(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("REBUTTAL_NARRATIVE_ENABLED", "true")
+    monkeypatch.setenv("REBUTTAL_NARRATIVE_USE_STUBS", "true")
+
+    path = Path(rebuttal_builder_agent(_state())["rebuttal_document_path"])
+    packet = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+
+    assert packet["narrative_generated"] is True
+    assert packet["sections"][0]["title"] == "Summary"
+    assert "3DS authentication completed" in packet["sections"][0]["body"]
+
+
+def test_narrative_failure_keeps_valid_deterministic_packet(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("REBUTTAL_NARRATIVE_ENABLED", "true")
+
+    def fail_narrative(packet: dict) -> str:
+        raise RuntimeError("narrative service unavailable")
+
+    monkeypatch.setattr("agents.rebuttal_builder.generate_rebuttal_narrative", fail_narrative)
+    path = Path(rebuttal_builder_agent(_state())["rebuttal_document_path"])
+    packet = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+
+    assert path.read_bytes().startswith(b"%PDF-")
+    assert packet["narrative_generated"] is False
+    assert packet["sections"][0]["title"] == "Dispute summary"
+
+
+def test_generated_narrative_prohibited_language_is_rejected(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("REBUTTAL_NARRATIVE_ENABLED", "true")
+    monkeypatch.setattr(
+        "agents.rebuttal_builder.generate_rebuttal_narrative",
+        lambda packet: "We accept liability because of merchant error.",
+    )
+    state = _state()
+    state["comms"] = {
+        "emails": [],
+        "support_tickets": [],
+        "post_delivery_interaction": False,
+        "complaint_raised_before_chargeback": False,
+        "raw": {},
+    }
+
+    rebuttal_builder_agent(state)
+    result = quality_check_agent(state)
+
+    assert result["quality_rejection_reason"] == "prohibited_language_used"
+    assert result["quality_rejection_details"]["phrases"] == [
+        "we accept liability",
+        "merchant error",
+    ]
 
 
 def test_rebuttal_pdf_is_deterministic(tmp_path, monkeypatch) -> None:
