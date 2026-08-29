@@ -7,9 +7,16 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from agents.learning import learning_agent
 from analytics.merchant_stats import merchant_dispute_ratio
 from api.auth import require_api_key
-from api.schemas import DisputeDetail, DisputeSummary, OutcomeResponse, OutcomeUpdate
+from api.schemas import (
+    CaseSummaryResponse,
+    DisputeDetail,
+    DisputeSummary,
+    OutcomeResponse,
+    OutcomeUpdate,
+)
 from api.store import store
 from core.state import is_filed_dispute
+from integrations.case_summary import generate_case_summary
 
 
 router = APIRouter(
@@ -95,12 +102,25 @@ def get_dispute(
         expected_value=state.get("expected_value"),
         third_party_fraud_indicators=state.get("third_party_fraud_indicators"),
         identity_continuity=state.get("identity_continuity"),
+        human_review_summary=state.get("human_review_summary"),
         merchant_dispute_ratio=merchant_dispute_ratio(
             merchant,
             store.list_disputes(),
             state["card_network"],
         ),
     )
+
+
+@router.get("/{chargeback_id}/summary", response_model=CaseSummaryResponse)
+def get_dispute_summary(chargeback_id: str) -> CaseSummaryResponse:
+    record = store.get_dispute(chargeback_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Dispute not found.")
+    try:
+        summary = generate_case_summary(record["state"])
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Case summary generation is unavailable.") from exc
+    return CaseSummaryResponse(chargeback_id=chargeback_id, human_review_summary=summary)
 
 
 @router.post("/{chargeback_id}/outcome", response_model=OutcomeResponse)
