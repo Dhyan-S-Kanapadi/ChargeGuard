@@ -60,7 +60,27 @@ def test_degraded_escalation_populates_stubbed_summary(monkeypatch) -> None:
 
     assert result["final_outcome"] == "PENDING"
     assert result["human_review_summary"] is not None
-    assert "Evidence collection is degraded because of device" in result["human_review_summary"]
+    assert "evidence collection was degraded because of device" in result["human_review_summary"]
+
+
+def test_model_failure_summary_does_not_blame_evidence_collection(monkeypatch) -> None:
+    """A model failure must not be represented as an evidence-collection failure."""
+    monkeypatch.setenv("CASE_SUMMARY_USE_STUBS", "true")
+
+    state = _state()
+    state["transaction"] = {"otp_verified": True}
+    state["shipping"] = {"status": "DELIVERED"}
+    state["evidence_collection_degraded"] = False
+    state["degraded_reasons"] = []
+    state["decision_reasoning"] = (
+        "Model unavailable; win probability defaulted to 0.0 (model_unavailable)."
+    )
+
+    result = human_escalation_agent(state)
+
+    assert result["human_review_summary"] is not None
+    assert "evidence collection" not in result["human_review_summary"].lower()
+    assert "model" in result["human_review_summary"].lower()
 
 
 def test_case_summary_client_uses_a_constrained_summary_tool() -> None:

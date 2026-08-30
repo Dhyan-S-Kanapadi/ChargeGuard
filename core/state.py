@@ -135,6 +135,7 @@ class ChargebackState(TypedDict):
 
     # Response
     rebuttal_document_path: Optional[str]
+    rebuttal_build_error: NotRequired[Optional[str]]
     quality_approved: bool
     quality_rejection_reason: Optional[str]
     quality_rejection_details: NotRequired[dict]

@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChargeGuard — Case Ledger</title>
+<style>
+  :root {
+    --ink: #0f1419;
+    --paper: #171d26;
+    --paper-raised: #1d2530;
+    --line: #2a323d;
+    --text: #e8eaed;
+    --muted: #8b94a3;
+    --fight: #3dd68c;
+    --accept: #e8a33d;
+    --escalate: #e85d5d;
+    --fight-bg: rgba(61, 214, 140, 0.12);
+    --accept-bg: rgba(232, 163, 61, 0.12);
+    --escalate-bg: rgba(232, 93, 93, 0.14);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  header {
+    padding: 28px 32px 20px;
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 {
+    margin: 0 0 4px;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  header .sub {
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .config {
+    display: flex;
+    gap: 10px;
+    padding: 16px 32px;
+    border-bottom: 1px solid var(--line);
+    background: var(--paper);
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .config input {
+    background: var(--ink);
+    border: 1px solid var(--line);
+    color: var(--text);
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+  }
+  .config input.mono { font-family: ui-monospace, monospace; }
+  #baseUrl { width: 220px; }
+  #apiKey { width: 200px; }
+  .config button {
+    background: var(--fight);
+    color: #06231a;
+    border: none;
+    padding: 9px 16px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .config button:hover { filter: brightness(1.08); }
+  .config .status {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .config .status.live { color: var(--fight); }
+  .config .status.err { color: var(--escalate); }
+
+  .ledger {
+    display: flex;
+    gap: 0;
+    padding: 18px 32px;
+    border-bottom: 1px solid var(--line);
+    overflow-x: auto;
+  }
+  .ledger .stat {
+    padding: 0 28px;
+    border-right: 1px solid var(--line);
+    min-width: 120px;
+  }
+  .ledger .stat:last-child { border-right: none; }
+  .ledger .stat .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .ledger .stat .value {
+    font-size: 22px;
+    font-weight: 700;
+  }
+  .ledger .stat .value.fight { color: var(--fight); }
+  .ledger .stat .value.accept { color: var(--accept); }
+  .ledger .stat .value.escalate { color: var(--escalate); }
+
+  main {
+    padding: 24px 32px 60px;
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 80px 20px;
+    font-size: 14px;
+  }
+  .case {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    margin-bottom: 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  .case::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 6px;
+    background-image: radial-gradient(circle, var(--ink) 3px, transparent 3px);
+    background-size: 14px 6px;
+    background-position: center top;
+  }
+  .case-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 22px 22px 14px;
+    gap: 16px;
+  }
+  .case-id {
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .case-amount {
+    font-size: 24px;
+    font-weight: 700;
+  }
+  .stamp {
+    font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 7px 14px;
+    border-radius: 5px;
+    transform: rotate(-3deg);
+    white-space: nowrap;
+    border: 2px solid transparent;
+  }
+  .stamp.FIGHT { color: var(--fight); background: var(--fight-bg); border-color: var(--fight); }
+  .stamp.ACCEPT { color: var(--accept); background: var(--accept-bg); border-color: var(--accept); }
+  .stamp.ESCALATE_DEGRADED { color: var(--escalate); background: var(--escalate-bg); border-color: var(--escalate); }
+  .stamp.PENDING { color: var(--muted); background: rgba(139,148,163,0.12); border-color: var(--muted); }
+
+  .case-body {
+    padding: 0 22px 20px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 16px;
+  }
+  .metric .label {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin-bottom: 5px;
+  }
+  .metric .value { font-size: 15px; font-weight: 600; }
+  .bar-track {
+    height: 6px;
+    background: var(--ink);
+    border-radius: 3px;
+    margin-top: 6px;
+    overflow: hidden;
+  }
+  .bar-fill { height: 100%; border-radius: 3px; }
+  .flag {
+    margin: 0 22px 18px;
+    padding: 10px 14px;
+    background: var(--escalate-bg);
+    border-left: 3px solid var(--escalate);
+    border-radius: 0 6px 6px 0;
+    font-size: 12.5px;
+    color: var(--text);
+  }
+  .flag .label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--escalate);
+    margin-bottom: 3px;
+    font-weight: 700;
+  }
+  .case-foot {
+    padding: 12px 22px;
+    border-top: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+  }
+  .case-foot a { color: var(--fight); text-decoration: none; }
+  .case-foot a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ChargeGuard — Case Ledger</h1>
+  <div class="sub">Live evidence-weighted dispute decisions, not a fraud guess</div>
+</header>
+
+<div class="config">
+  <input id="baseUrl" class="mono" placeholder="http://127.0.0.1:8000" value="http://127.0.0.1:8000">
+  <input id="apiKey" class="mono" placeholder="X-API-Key" type="password">
+  <button onclick="loadAll()">Refresh</button>
+  <span class="status" id="status">not connected</span>
+</div>
+
+<div class="ledger" id="ledger">
+  <div class="stat"><div class="label">Total Cases</div><div class="value mono" id="s-total">—</div></div>
+  <div class="stat"><div class="label">Fight</div><div class="value mono fight" id="s-fight">—</div></div>
+  <div class="stat"><div class="label">Accept</div><div class="value mono accept" id="s-accept">—</div></div>
+  <div class="stat"><div class="label">Escalated</div><div class="value mono escalate" id="s-escalate">—</div></div>
+  <div class="stat"><div class="label">Win Rate</div><div class="value mono" id="s-winrate">—</div></div>
+  <div class="stat"><div class="label">Avg EV</div><div class="value mono" id="s-avgev">—</div></div>
+</div>
+
+<main id="main">
+  <div class="empty">Enter your API key above and press Refresh to load live cases.</div>
+</main>
+
+<script>
+function fmtMoney(amount, currency) {
+  if (amount === null || amount === undefined) return "—";
+  const symbol = currency === "USD" ? "$" : (currency === "INR" ? "\u20B9" : (currency || ""));
+  return symbol + Number(amount).toLocaleString(undefined, {maximumFractionDigits: 2});
+}
+function fmtPct(v) {
+  if (v === null || v === undefined) return "—";
+  return (Number(v) * 100).toFixed(1) + "%";
+}
+function scoreColor(label) {
+  if (label === "high") return "#e85d5d";
+  if (label === "medium") return "#e8a33d";
+  return "#3dd68c";
+}
+async function api(path) {
+  const base = document.getElementById("baseUrl").value.replace(/\/$/, "");
+  const key = document.getElementById("apiKey").value;
+  const res = await fetch(base + path, { headers: { "X-API-Key": key } });
+  if (!res.ok) throw new Error(res.status + " " + (await res.text()));
+  return res.json();
+}
+function renderStats(s) {
+  document.getElementById("s-total").textContent = s.total_disputes_processed ?? "—";
+  const byDecision = s.decisions || {};
+  document.getElementById("s-fight").textContent = byDecision.FIGHT ?? 0;
+  document.getElementById("s-accept").textContent = byDecision.ACCEPT ?? 0;
+  document.getElementById("s-escalate").textContent = byDecision.ESCALATE_DEGRADED ?? 0;
+  document.getElementById("s-winrate").textContent = s.win_rate !== null && s.win_rate !== undefined
+    ? fmtPct(s.win_rate) : "n/a";
+  document.getElementById("s-avgev").textContent = s.average_expected_value !== null && s.average_expected_value !== undefined
+    ? Number(s.average_expected_value).toFixed(0) : "—";
+}
+function subscoreRow(label, sub) {
+  if (!sub) return "";
+  const val = sub.score ?? sub.value ?? 0;
+  const tag = sub.label ?? "";
+  const color = scoreColor(tag);
+  return `<div class="metric">
+    <div class="label">${label}</div>
+    <div class="value mono">${val.toFixed?.(1) ?? val} <span style="color:${color};font-size:11px;text-transform:uppercase;">${tag}</span></div>
+    <div class="bar-track"><div class="bar-fill" style="width:${Math.min(val,100)}%;background:${color};"></div></div>
+  </div>`;
+}
+function renderCase(detail) {
+  const s = detail.state || {};
+  const decision = s.decision || detail.status || "PENDING";
+  const currency = s.currency || "";
+  return `
+  <div class="case">
+    <div class="case-head">
+      <div>
+        <div class="case-id mono">${detail.chargeback_id} &middot; ${s.card_network || ""} ${s.reason_code || ""}</div>
+        <div class="case-amount mono">${fmtMoney(s.dispute_amount, currency)}</div>
+      </div>
+      <div class="stamp ${decision}">${String(decision).replace("_", " ")}</div>
+    </div>
+    <div class="case-body">
+      <div class="metric">
+        <div class="label">Win Probability</div>
+        <div class="value mono">${fmtPct(detail.win_probability ?? s.win_probability)}</div>
+      </div>
+      <div class="metric">
+        <div class="label">Expected Value</div>
+        <div class="value mono">${(detail.expected_value ?? s.expected_value) != null ? fmtMoney(detail.expected_value ?? s.expected_value, currency) : "—"}</div>
+      </div>
+      ${subscoreRow("Third-Party Fraud", detail.third_party_fraud_indicators ?? s.third_party_fraud_indicators)}
+      ${subscoreRow("Identity Continuity", detail.identity_continuity ?? s.identity_continuity)}
+    </div>
+    ${s.contradiction_summary ? `<div class="flag"><div class="label">Contradiction Detected</div>${s.contradiction_summary}</div>` : ""}
+    ${detail.human_review_summary ? `<div class="flag" style="border-left-color:#8b94a3;background:rgba(139,148,163,0.1);"><div class="label" style="color:#8b94a3;">Reviewer Summary</div>${detail.human_review_summary}</div>` : ""}
+    <div class="case-foot">
+      <span>${s.final_outcome ? "Outcome: " + s.final_outcome : (s.filing_confirmation || "in progress")}</span>
+      ${s.rebuttal_document_path ? `<a href="#" onclick="alert('PDF at: ${s.rebuttal_document_path}'); return false;">View rebuttal PDF path</a>` : ""}
+    </div>
+  </div>`;
+}
+async function loadAll() {
+  const statusEl = document.getElementById("status");
+  statusEl.textContent = "loading…";
+  statusEl.className = "status";
+  try {
+    const [stats, summaries] = await Promise.all([api("/stats"), api("/disputes")]);
+    renderStats(stats);
+    const list = Array.isArray(summaries) ? summaries : (summaries.disputes || []);
+    const main = document.getElementById("main");
+    if (!list.length) {
+      main.innerHTML = '<div class="empty">No disputes yet. Fire a webhook to see cases appear here.</div>';
+      statusEl.textContent = "live — " + new Date().toLocaleTimeString();
+      statusEl.className = "status live";
+      return;
+    }
+    const details = await Promise.all(
+      list.map(item => api("/disputes/" + encodeURIComponent(item.chargeback_id)).catch(() => null))
+    );
+    main.innerHTML = details
+      .filter(Boolean)
+      .reverse()
+      .map(renderCase)
+      .join("");
+    statusEl.textContent = "live — " + new Date().toLocaleTimeString();
+    statusEl.className = "status live";
+  } catch (e) {
+    statusEl.textContent = "error: " + e.message;
+    statusEl.className = "status err";
+  }
+}
+setInterval(() => {
+  if (document.getElementById("apiKey").value) loadAll();
+}, 8000);
+</script>
+</body>
+</html>

@@ -79,6 +79,16 @@ def quality_check_agent(state: ChargebackState) -> ChargebackState:
     """Validate the PDF filing artifact and its structured fact sidecar."""
     logger.info("Running quality check agent for %s", state["chargeback_id"])
 
+    if state.get("rebuttal_build_error"):
+        return _reject(
+            state,
+            (
+                state["rebuttal_build_error"],
+                {"card_network": state["card_network"]},
+                False,
+            ),
+        )
+
     if state.get("quality_loop_count", 0) >= 3:
         return _reject(state, ("quality_attempt_limit_reached", {}, False))
     state["quality_loop_count"] = state.get("quality_loop_count", 0) + 1
