@@ -221,7 +221,22 @@ def rebuttal_builder_agent(state: ChargebackState) -> ChargebackState:
     pdf_path = output_dir / f"{state['chargeback_id']}_rebuttal.pdf"
     packet_path = pdf_path.with_suffix(".json")
 
-    packet = _build_rebuttal_packet(state)
+    try:
+        packet = _build_rebuttal_packet(state)
+        template_text = _load_template(state)
+    except ValueError:
+        logger.exception(
+            "No playbook/template available for card network %s; escalating for human review",
+            state["card_network"],
+            extra={
+                "chargeback_id": state["chargeback_id"],
+                "card_network": state["card_network"],
+                "rebuttal_build_error": "unsupported_card_network",
+            },
+        )
+        state["rebuttal_document_path"] = None
+        state["rebuttal_build_error"] = "unsupported_card_network"
+        return state
     if rebuttal_narrative_enabled():
         try:
             narrative = generate_rebuttal_narrative(packet)
@@ -235,7 +250,6 @@ def rebuttal_builder_agent(state: ChargebackState) -> ChargebackState:
         json.dumps(packet, default=str, indent=2, sort_keys=True),
         encoding="utf-8",
     )
-    template_text = _load_template(state)
     if state.get("quality_rejection_reason") == "prohibited_language_used":
         template_text = _replace_prohibited_language(template_text)
     elif state.get("quality_rejection_reason") == "exceeds_page_limit":

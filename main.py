@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from api.assistant import router as assistant_router
 from api.disputes import router as disputes_router
@@ -17,6 +18,7 @@ app.include_router(disputes_router)
 app.include_router(merchants_router)
 app.include_router(stats_router)
 app.include_router(assistant_router)
+app.mount("/dashboard", StaticFiles(directory="static", html=True), name="dashboard")
 
 
 def _model_loaded() -> bool:

@@ -1,7 +1,7 @@
 """Bounded, optional plain-English summaries for human case review."""
 
-import os
 import json
+import os
 from collections.abc import Mapping
 from typing import Any
 
@@ -55,6 +55,8 @@ def case_summary_facts(state: ChargebackState) -> dict[str, Any]:
         "identity_continuity": state.get("identity_continuity"),
         "contradiction_flags": state.get("contradiction_flags", []),
         "degraded_reasons": state.get("degraded_reasons", []),
+        "decision_reasoning": state.get("decision_reasoning"),
+        "requires_human_review": state.get("requires_human_review"),
         "evidence_status": evidence_status,
     }
 
@@ -93,6 +95,10 @@ class CaseSummaryClient:
                 "Use only the supplied facts. Never invent, infer, estimate, or name evidence "
                 "not present in those facts. Write 2-4 concise sentences covering available "
                 "evidence, missing or degraded evidence, and why a human must decide. "
+                "The decision_reasoning field states the actual system-level reason for escalation "
+                "(for example, a missing or failed scoring model) separately from evidence collection "
+                "status in degraded_reasons and evidence_status; do not conflate the two, and state "
+                "clearly which one applies to this case. "
                 "Return only the summary text, not JSON or headings."
             ),
             "tools": [
@@ -161,10 +167,18 @@ class CaseSummaryClient:
 def _stub_summary(facts: dict[str, Any]) -> str:
     evidence = facts["evidence_status"]
     available = ", ".join(name for name, present in evidence.items() if present) or "no evidence"
-    degraded = ", ".join(facts["degraded_reasons"]) or "unspecified reasons"
+    degraded_reasons = facts.get("degraded_reasons") or []
+    reasoning = facts.get("decision_reasoning") or ""
+
+    if degraded_reasons:
+        cause = f"evidence collection was degraded because of {', '.join(degraded_reasons)}"
+    elif "model_unavailable" in reasoning or "model_error" in reasoning:
+        cause = "the win-probability model was unavailable or failed to run"
+    else:
+        cause = "the automated decision could not be made with confidence"
     return (
-        f"Available evidence includes {available}. Evidence collection is degraded because of "
-        f"{degraded}, so a human reviewer must assess the existing record before proceeding."
+        f"Available evidence includes {available}. This case required escalation because "
+        f"{cause}, so a human reviewer must assess the existing record before proceeding."
     )
 
 
