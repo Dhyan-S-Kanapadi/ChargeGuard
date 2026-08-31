@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 
+from integrations.connector_config import connector_env_value
+
 
 class FreshdeskConfigError(RuntimeError):
     """Raised when Freshdesk credentials are missing."""
@@ -31,10 +33,22 @@ class FreshdeskClient:
         self._client = client
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> "FreshdeskClient":
-        values = env or os.environ
-        api_key = values.get("FRESHDESK_API_KEY")
-        domain = values.get("FRESHDESK_DOMAIN")
+    def from_env(
+        cls,
+        env: Mapping[str, str] | None = None,
+        *,
+        connector_ref: str | None = None,
+        domain: str | None = None,
+    ) -> "FreshdeskClient":
+        values = os.environ if env is None else env
+        try:
+            api_key = connector_env_value(values, connector_ref, "FRESHDESK_API_KEY")
+            configured_domain = connector_env_value(
+                values, connector_ref, "FRESHDESK_DOMAIN"
+            )
+        except ValueError as exc:
+            raise FreshdeskConfigError(str(exc)) from exc
+        domain = domain or configured_domain
 
         if not api_key or not domain:
             raise FreshdeskConfigError("FRESHDESK_API_KEY and FRESHDESK_DOMAIN are required.")

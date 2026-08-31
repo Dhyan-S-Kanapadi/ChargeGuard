@@ -9,9 +9,11 @@ class MerchantProfile(TypedDict):
     name: str
     vertical: Literal["ecommerce", "food_delivery", "quick_commerce"]
     payment_provider: NotRequired[Literal["razorpay", "stripe"]]
+    razorpay_account_id: NotRequired[str | None]
     shipping_provider: NotRequired[Literal["shiprocket", "delhivery"]]
-    # TODO: FreshdeskClient still uses FRESHDESK_DOMAIN; this is informational until it supports per-merchant domains.
+    support_connector_ref: NotRequired[str | None]
     freshdesk_domain: str
+    gmail_user_id: NotRequired[str | None]
     average_order_value: float
     chargeback_history_count: int
     transaction_volume_30d_by_network: NotRequired[dict[str, int]]
@@ -98,6 +100,13 @@ class ChargebackState(TypedDict):
     tracking_id: NotRequired[str]
     chargeback_received_at: NotRequired[datetime]
     card_fingerprint: NotRequired[str]
+    provider: NotRequired[str]
+    provider_event_id: NotRequired[str]
+    provider_dispute_status: NotRequired[str]
+    provider_phase: NotRequired[str]
+    provider_reason_code: NotRequired[str]
+    provider_account_id: NotRequired[str]
+    provider_respond_by: NotRequired[datetime]
     reason_code: str
     card_network: Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"]
     dispute_amount: float

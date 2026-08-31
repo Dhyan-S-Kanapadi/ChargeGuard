@@ -218,12 +218,43 @@ def test_webhook_runs_graph_and_exposes_completed_dispute(configured_client: Tes
     assert detail["state"]["outcome_recorded_at"] is None
     assert detail["third_party_fraud_indicators"] == detail["state"]["third_party_fraud_indicators"]
     assert detail["identity_continuity"] == detail["state"]["identity_continuity"]
-
     list_response = configured_client.get("/disputes")
     assert list_response.status_code == 200
     assert list_response.json()[0]["chargeback_id"] == "cb_api_001"
     assert list_response.json()[0]["currency"] == "INR"
 
+
+def test_merchant_support_connector_metadata_is_validated_without_secrets(
+    client: TestClient,
+) -> None:
+    payload = _merchant_payload()
+    payload.update(
+        {
+            "support_connector_ref": "ACME_SUPPORT",
+            "gmail_user_id": "support@acme.example",
+        }
+    )
+
+    response = client.post("/merchants", json=payload)
+
+    assert response.status_code == 201
+    merchant = response.json()
+    assert merchant["support_connector_ref"] == "ACME_SUPPORT"
+    assert merchant["gmail_user_id"] == "support@acme.example"
+    assert merchant["freshdesk_domain"] == "demo.freshdesk.com"
+    assert "gmail_access_token" not in merchant
+    assert "freshdesk_api_key" not in merchant
+
+    with_secrets = _merchant_payload()
+    with_secrets["merchant_id"] = "merchant_api_secrets"
+    with_secrets["gmail_access_token"] = "must-not-be-stored"
+    with_secrets["freshdesk_api_key"] = "must-not-be-stored"
+    assert client.post("/merchants", json=with_secrets).status_code == 422
+
+    invalid = _merchant_payload()
+    invalid["merchant_id"] = "merchant_api_invalid"
+    invalid["support_connector_ref"] = "acme-support"
+    assert client.post("/merchants", json=invalid).status_code == 422
 
 def test_dispute_detail_redacts_raw_payloads_and_transaction_pii(
     configured_client: TestClient,

@@ -21,6 +21,22 @@ def test_gmail_reader_requires_access_token() -> None:
         GmailReader.from_env({})
 
 
+def test_gmail_reader_uses_merchant_scoped_credentials_and_user_override() -> None:
+    reader = GmailReader.from_env(
+        {
+            "GMAIL_ACCESS_TOKEN": "global_token",
+            "GMAIL_USER_ID": "global@example.com",
+            "CHARGEGUARD_CONNECTOR_ACME_GMAIL_ACCESS_TOKEN": "acme_token",
+            "CHARGEGUARD_CONNECTOR_ACME_GMAIL_USER_ID": "env-acme@example.com",
+        },
+        connector_ref="ACME",
+        user_id="support@acme.example",
+    )
+
+    assert reader.access_token == "acme_token"
+    assert reader.user_id == "support@acme.example"
+
+
 def test_gmail_reader_searches_and_fetches_messages() -> None:
     requests: list[httpx.Request] = []
 

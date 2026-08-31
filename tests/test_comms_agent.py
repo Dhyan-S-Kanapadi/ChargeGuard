@@ -172,3 +172,44 @@ def test_comms_agent_keeps_freshdesk_when_gmail_fails(monkeypatch) -> None:
     assert result["comms"]["raw"]["source_errors"] == {
         "gmail": "gmail unavailable"
     }
+
+
+def test_comms_collection_uses_merchant_support_connector(monkeypatch) -> None:
+    state = _state()
+    state["merchant_profile"]["support_connector_ref"] = "ACME"
+    state["merchant_profile"]["gmail_user_id"] = "support@acme.example"
+    calls: dict[str, dict] = {}
+
+    class FakeGmailReader:
+        @classmethod
+        def from_env(cls, **kwargs):
+            calls["gmail"] = kwargs
+            return cls()
+
+        def search_messages(self, query):
+            calls["gmail_query"] = {"query": query}
+            return []
+
+    class FakeFreshdeskClient:
+        @classmethod
+        def from_env(cls, **kwargs):
+            calls["freshdesk"] = kwargs
+            return cls()
+
+        def search_tickets(self, *, email):
+            calls["freshdesk_query"] = {"email": email}
+            return []
+
+    monkeypatch.setattr(comms, "GmailReader", FakeGmailReader)
+    monkeypatch.setattr(comms, "FreshdeskClient", FakeFreshdeskClient)
+
+    assert comms._collect_gmail(state) == []
+    assert comms._collect_freshdesk(state) == []
+    assert calls["gmail"] == {
+        "connector_ref": "ACME",
+        "user_id": "support@acme.example",
+    }
+    assert calls["freshdesk"] == {
+        "connector_ref": "ACME",
+        "domain": "demo.freshdesk.com",
+    }
