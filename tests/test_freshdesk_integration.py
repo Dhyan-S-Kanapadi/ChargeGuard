@@ -24,6 +24,22 @@ def test_freshdesk_client_requires_credentials() -> None:
         FreshdeskClient.from_env({})
 
 
+def test_freshdesk_client_uses_merchant_scoped_credentials_and_domain_override() -> None:
+    client = FreshdeskClient.from_env(
+        {
+            "FRESHDESK_API_KEY": "global_key",
+            "FRESHDESK_DOMAIN": "global.freshdesk.com",
+            "CHARGEGUARD_CONNECTOR_ACME_FRESHDESK_API_KEY": "acme_key",
+            "CHARGEGUARD_CONNECTOR_ACME_FRESHDESK_DOMAIN": "env-acme.freshdesk.com",
+        },
+        connector_ref="ACME",
+        domain="merchant-acme.freshdesk.com",
+    )
+
+    assert client.api_key == "acme_key"
+    assert client.domain == "merchant-acme.freshdesk.com"
+
+
 def test_freshdesk_client_searches_tickets_with_basic_auth() -> None:
     expected_auth = "Basic " + base64.b64encode(b"fd_key:X").decode("ascii")
 

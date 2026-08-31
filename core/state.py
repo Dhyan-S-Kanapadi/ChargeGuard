@@ -11,8 +11,9 @@ class MerchantProfile(TypedDict):
     payment_provider: NotRequired[Literal["razorpay", "stripe"]]
     razorpay_account_id: NotRequired[str | None]
     shipping_provider: NotRequired[Literal["shiprocket", "delhivery"]]
-    # TODO: FreshdeskClient still uses FRESHDESK_DOMAIN; this is informational until it supports per-merchant domains.
+    support_connector_ref: NotRequired[str | None]
     freshdesk_domain: str
+    gmail_user_id: NotRequired[str | None]
     average_order_value: float
     chargeback_history_count: int
     transaction_volume_30d_by_network: NotRequired[dict[str, int]]

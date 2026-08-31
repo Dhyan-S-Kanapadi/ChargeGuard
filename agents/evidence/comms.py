@@ -111,7 +111,11 @@ def _collect_gmail(state: ChargebackState) -> list[dict[str, Any]]:
     query = f'"{order_id}"'
     if customer_email:
         query = f'{query} (from:{customer_email} OR to:{customer_email})'
-    messages = GmailReader.from_env().search_messages(query)
+    merchant = state["merchant_profile"]
+    messages = GmailReader.from_env(
+        connector_ref=merchant.get("support_connector_ref"),
+        user_id=merchant.get("gmail_user_id"),
+    ).search_messages(query)
     return [_normalize_gmail_message(message, customer_email) for message in messages]
 
 
@@ -120,7 +124,11 @@ def _collect_freshdesk(state: ChargebackState) -> list[dict[str, Any]]:
     if not customer_email:
         raise ValueError("Freshdesk collection requires customer email")
     order_id = state.get("order_id", "").lower()
-    tickets = FreshdeskClient.from_env().search_tickets(email=customer_email)
+    merchant = state["merchant_profile"]
+    tickets = FreshdeskClient.from_env(
+        connector_ref=merchant.get("support_connector_ref"),
+        domain=merchant.get("freshdesk_domain") or None,
+    ).search_tickets(email=customer_email)
     if not order_id:
         return tickets
     return [

@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 
+from integrations.connector_config import connector_env_value
+
 
 GMAIL_BASE_URL = "https://gmail.googleapis.com/gmail/v1"
 
@@ -35,14 +37,28 @@ class GmailReader:
         self._client = client
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> "GmailReader":
-        values = env or os.environ
-        access_token = values.get("GMAIL_ACCESS_TOKEN")
+    def from_env(
+        cls,
+        env: Mapping[str, str] | None = None,
+        *,
+        connector_ref: str | None = None,
+        user_id: str | None = None,
+    ) -> "GmailReader":
+        values = os.environ if env is None else env
+        try:
+            access_token = connector_env_value(
+                values, connector_ref, "GMAIL_ACCESS_TOKEN"
+            )
+            configured_user_id = connector_env_value(
+                values, connector_ref, "GMAIL_USER_ID"
+            )
+        except ValueError as exc:
+            raise GmailConfigError(str(exc)) from exc
         if not access_token:
             raise GmailConfigError("GMAIL_ACCESS_TOKEN is required.")
         return cls(
             access_token=access_token,
-            user_id=values.get("GMAIL_USER_ID", "me"),
+            user_id=user_id or configured_user_id or "me",
         )
 
     def search_messages(self, query: str, *, max_results: int = 50) -> list[dict[str, Any]]:

@@ -405,6 +405,8 @@ When `CHARGEGUARD_USE_STUBS=true`, deterministic evidence is returned for local 
 
 `CHARGEGUARD_USE_STUBS` is the global default: set it to `true` to use stubs everywhere. To test one provider without changing the others, set that provider's `*_USE_STUBS=false` override and provide its real credentials; unset overrides continue to follow the global setting. Start with Razorpay sandbox test-mode keys from the Razorpay dashboard, which do not move real money, before attempting a live run across multiple providers.
 
+For multiple merchants, set a non-secret `support_connector_ref` such as `ACME` when creating the merchant. ChargeGuard first reads `CHARGEGUARD_CONNECTOR_ACME_GMAIL_ACCESS_TOKEN`, `CHARGEGUARD_CONNECTOR_ACME_GMAIL_USER_ID`, `CHARGEGUARD_CONNECTOR_ACME_FRESHDESK_API_KEY`, and `CHARGEGUARD_CONNECTOR_ACME_FRESHDESK_DOMAIN`, then falls back to the global variables above. Merchant fields `gmail_user_id` and `freshdesk_domain` override their corresponding environment values; credentials remain outside API payloads and responses.
+
 ## Razorpay Dispute Webhooks And Local Simulator
 
 `POST /webhook/razorpay` receives Razorpay-shaped dispute events without `X-API-Key`. It authenticates the exact raw body with `HMAC-SHA256(raw_body, RAZORPAY_WEBHOOK_SECRET)` and `X-Razorpay-Signature`; this secret is distinct from `RAZORPAY_KEY_SECRET`, which is only for outgoing Razorpay API requests. Register a Razorpay merchant with its `razorpay_account_id` so the event's top-level `account_id` can be resolved safely.
