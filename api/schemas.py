@@ -9,6 +9,7 @@ class MerchantCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     vertical: Literal["ecommerce", "food_delivery", "quick_commerce"]
     payment_provider: Literal["razorpay", "stripe"] | None = None
+    razorpay_account_id: str | None = Field(default=None, min_length=1, max_length=100)
     shipping_provider: Literal["shiprocket", "delhivery"] | None = None
     freshdesk_domain: str = ""
     average_order_value: float = Field(default=0, ge=0)
@@ -34,6 +35,7 @@ class MerchantResponse(BaseModel):
     name: str
     vertical: str
     payment_provider: str | None = None
+    razorpay_account_id: str | None = None
     shipping_provider: str | None = None
     average_order_value: float
     chargeback_history_count: int
@@ -98,6 +100,32 @@ class DisputeDetail(BaseModel):
     error: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class RazorpaySimulatorCreate(BaseModel):
+    merchant_id: str = Field(min_length=1, max_length=100)
+    payment_id: str = Field(min_length=1, max_length=200)
+    order_id: str = Field(min_length=1, max_length=200)
+    payment_amount_paise: int = Field(gt=0)
+    dispute_amount_paise: int = Field(gt=0)
+    currency: str = Field(default="INR", min_length=3, max_length=3)
+    method: str = Field(default="upi", min_length=1, max_length=50)
+    card_network: Literal["VISA", "MASTERCARD", "RUPAY"]
+    network_reason_code: str = Field(min_length=1, max_length=20)
+    razorpay_reason_code: str = Field(min_length=1, max_length=100)
+    customer_email: str | None = Field(default=None, max_length=320)
+    customer_contact: str | None = Field(default=None, max_length=50)
+    vpa: str | None = Field(default=None, max_length=255)
+    respond_within_hours: int = Field(default=72, gt=0, le=24 * 90)
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_simulator_currency(cls, value: str) -> str:
+        return value.upper()
+
+
+class RazorpaySimulatorTransition(BaseModel):
+    state: Literal["action_required", "under_review", "won", "lost", "closed"]
 
 
 class CaseSummaryResponse(BaseModel):

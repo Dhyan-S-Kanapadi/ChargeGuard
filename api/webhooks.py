@@ -124,6 +124,19 @@ def _initial_state(
     return state
 
 
+def create_and_schedule_dispute(
+    payload: ChargebackWebhookPayload,
+    merchant_profile,
+    background_tasks: BackgroundTasks,
+) -> tuple[ChargebackState, bool]:
+    """Use the normalized path shared by internal and provider webhooks."""
+    state = _initial_state(payload, merchant_profile)
+    if not store.create_dispute(state):
+        return state, False
+    background_tasks.add_task(run_chargeback_graph, state)
+    return state, True
+
+
 @router.post(
     "/chargeback",
     response_model=WebhookAccepted,
@@ -138,8 +151,7 @@ def receive_chargeback(
     if merchant is None:
         raise HTTPException(status_code=404, detail="Merchant not found.")
 
-    state = _initial_state(payload, merchant)
-    if not store.create_dispute(state):
+    _, created = create_and_schedule_dispute(payload, merchant, background_tasks)
+    if not created:
         raise HTTPException(status_code=409, detail="Chargeback already exists.")
-    background_tasks.add_task(run_chargeback_graph, state)
     return WebhookAccepted(status="received", chargeback_id=payload.chargeback_id)

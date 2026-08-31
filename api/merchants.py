@@ -22,6 +22,7 @@ def _response(profile: MerchantProfile) -> MerchantResponse:
         name=profile["name"],
         vertical=profile["vertical"],
         payment_provider=profile.get("payment_provider"),
+        razorpay_account_id=profile.get("razorpay_account_id"),
         shipping_provider=profile.get("shipping_provider"),
         average_order_value=profile["average_order_value"],
         chargeback_history_count=profile["chargeback_history_count"],
@@ -37,7 +38,7 @@ def _response(profile: MerchantProfile) -> MerchantResponse:
 def create_merchant(payload: MerchantCreate) -> MerchantResponse:
     profile: MerchantProfile = payload.model_dump(exclude_none=True)  # type: ignore[assignment]
     if not store.create_merchant(profile):
-        raise HTTPException(status_code=409, detail="Merchant already exists.")
+        raise HTTPException(status_code=409, detail="Merchant ID or Razorpay account ID already exists.")
     return _response(profile)
 
 

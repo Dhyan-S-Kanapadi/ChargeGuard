@@ -405,6 +405,22 @@ When `CHARGEGUARD_USE_STUBS=true`, deterministic evidence is returned for local 
 
 `CHARGEGUARD_USE_STUBS` is the global default: set it to `true` to use stubs everywhere. To test one provider without changing the others, set that provider's `*_USE_STUBS=false` override and provide its real credentials; unset overrides continue to follow the global setting. Start with Razorpay sandbox test-mode keys from the Razorpay dashboard, which do not move real money, before attempting a live run across multiple providers.
 
+## Razorpay Dispute Webhooks And Local Simulator
+
+`POST /webhook/razorpay` receives Razorpay-shaped dispute events without `X-API-Key`. It authenticates the exact raw body with `HMAC-SHA256(raw_body, RAZORPAY_WEBHOOK_SECRET)` and `X-Razorpay-Signature`; this secret is distinct from `RAZORPAY_KEY_SECRET`, which is only for outgoing Razorpay API requests. Register a Razorpay merchant with its `razorpay_account_id` so the event's top-level `account_id` can be resolved safely.
+
+The adapter supports `payment.dispute.created`, `action_required`, `under_review`, `won`, `lost`, and `closed`. It stores only a payload hash for idempotency, converts paise to major units, and keeps Razorpay's provider reason code separate from the card-network reason code in payment notes. Unmapped events are acknowledged without guessing a network code.
+
+For a free local simulation, set `ENVIRONMENT=development`, `CHARGEBACK_SIMULATOR_ENABLED=true`, `RAZORPAY_WEBHOOK_SECRET` and `API_KEY`, then start ChargeGuard and run:
+
+```bash
+py -m uvicorn main:app --port 8000
+py scripts/simulate_razorpay_chargeback.py
+py scripts/simulate_razorpay_chargeback.py --outcome won
+```
+
+The authenticated local routes are `POST /dev/razorpay-simulator/disputes`, `POST /dev/razorpay-simulator/disputes/{id}/transition`, and the two list routes under the same prefix. The simulator is disabled by default, returns 404 in production, and only posts signed payloads to `RAZORPAY_SIMULATOR_TARGET_URL`; it never calls Razorpay. `disp_SIM_...` IDs are local and do not exist in Razorpay, so they cannot be used with Razorpay's real accept/contest APIs. Disable the simulator by setting `CHARGEBACK_SIMULATOR_ENABLED=false`.
+
 ## Generated Outputs
 
 Rebuttal PDFs are written to:
