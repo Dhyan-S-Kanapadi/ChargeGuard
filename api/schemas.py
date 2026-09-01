@@ -121,14 +121,14 @@ class RazorpaySimulatorCreate(BaseModel):
     payment_amount_paise: int = Field(gt=0)
     dispute_amount_paise: int = Field(gt=0)
     currency: str = Field(default="INR", min_length=3, max_length=3)
-    method: str = Field(default="upi", min_length=1, max_length=50)
-    card_network: Literal["VISA", "MASTERCARD", "RUPAY"]
-    network_reason_code: str = Field(min_length=1, max_length=20)
+    method: Literal["card", "upi", "netbanking", "wallet"] = "card"
+    card_network: Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"] | None = None
+    network_reason_code: str | None = Field(default=None, min_length=1, max_length=20)
     razorpay_reason_code: str = Field(min_length=1, max_length=100)
     customer_email: str | None = Field(default=None, max_length=320)
     customer_contact: str | None = Field(default=None, max_length=50)
     vpa: str | None = Field(default=None, max_length=255)
-    respond_within_hours: int = Field(default=72, gt=0, le=24 * 90)
+    respond_within_hours: int = Field(default=72, ge=-(24 * 90), le=24 * 90)
 
     @field_validator("currency")
     @classmethod
@@ -138,6 +138,15 @@ class RazorpaySimulatorCreate(BaseModel):
 
 class RazorpaySimulatorTransition(BaseModel):
     state: Literal["action_required", "under_review", "won", "lost", "closed"]
+    force: bool = False
+
+
+class RazorpayReconciliationRequest(BaseModel):
+    merchant_id: str = Field(min_length=1, max_length=100)
+    from_timestamp: int | None = Field(default=None, ge=0)
+    to_timestamp: int | None = Field(default=None, ge=0)
+    count: int = Field(default=100, ge=1, le=100)
+    skip: int = Field(default=0, ge=0)
 
 
 class CaseSummaryResponse(BaseModel):

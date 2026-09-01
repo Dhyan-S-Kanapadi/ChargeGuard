@@ -1,5 +1,5 @@
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -7,6 +7,13 @@ from threading import RLock
 from typing import Any
 
 from core.state import ChargebackState, MerchantProfile
+
+
+def _provider_event_claim_timeout_seconds() -> int:
+    try:
+        return max(1, int(os.getenv("PROVIDER_EVENT_CLAIM_TIMEOUT_SECONDS", "300")))
+    except ValueError:
+        return 300
 
 
 class InMemoryStore:
@@ -111,15 +118,56 @@ class InMemoryStore:
 
     def claim_provider_event(self, event: dict[str, Any]) -> bool:
         """Atomically claim a provider event before any workflow scheduling."""
-        event_id = str(event["provider_event_id"])
+        event_id = str(event.get("event_id") or event.get("provider_event_id") or "")
+        if not event_id:
+            raise ValueError("Provider event requires an event ID.")
         with self._lock:
-            if event_id in self._provider_events:
-                return False
+            now = datetime.now(timezone.utc)
+            existing = self._provider_events.get(event_id)
+            if existing is not None:
+                processing_state = existing.get("processing_state") or existing.get(
+                    "processing_status"
+                )
+                last_attempt = existing.get("last_attempt_at") or existing.get("received_at")
+                stale_processing = (
+                    processing_state in {"received", "processing"}
+                    and isinstance(last_attempt, datetime)
+                    and last_attempt
+                    <= now
+                    - timedelta(seconds=_provider_event_claim_timeout_seconds())
+                )
+                if processing_state != "failed" and not stale_processing:
+                    return False
+                existing["processing_state"] = "received"
+                existing["processing_status"] = "received"
+                existing["failure_reason"] = None
+                existing["error"] = None
+                existing["processed_at"] = None
+                existing["last_attempt_at"] = now
+                existing["attempt_count"] = int(existing.get("attempt_count") or 1) + 1
+                self._save()
+                return True
             record = deepcopy(event)
-            record.setdefault("received_at", datetime.now(timezone.utc))
+            record["event_id"] = event_id
+            record["provider_event_id"] = event_id
+            event_type = record.get("event_type") or record.get("event_name")
+            record["event_type"] = event_type
+            record["event_name"] = event_type
+            dispute_id = record.get("provider_dispute_id") or record.get("chargeback_id")
+            record["provider_dispute_id"] = dispute_id
+            record["chargeback_id"] = dispute_id
+            record.setdefault("received_at", now)
+            record.setdefault("last_attempt_at", now)
+            record.setdefault("attempt_count", 1)
             record.setdefault("processed_at", None)
-            record.setdefault("error", None)
-            record.setdefault("processing_status", "received")
+            failure_reason = record.get("failure_reason") or record.get("error")
+            record["failure_reason"] = failure_reason
+            record["error"] = failure_reason
+            processing_state = record.get("processing_state") or record.get(
+                "processing_status", "received"
+            )
+            record["processing_state"] = processing_state
+            record["processing_status"] = processing_state
             self._provider_events[event_id] = record
             self._save()
             return True
@@ -127,8 +175,17 @@ class InMemoryStore:
     def update_provider_event(self, event_id: str, **updates: Any) -> None:
         with self._lock:
             event = self._provider_events[event_id]
+            if "processing_status" in updates and "processing_state" not in updates:
+                updates["processing_state"] = updates["processing_status"]
+            if "processing_state" in updates and "processing_status" not in updates:
+                updates["processing_status"] = updates["processing_state"]
+            if "error" in updates and "failure_reason" not in updates:
+                updates["failure_reason"] = updates["error"]
+            if "failure_reason" in updates and "error" not in updates:
+                updates["error"] = updates["failure_reason"]
             event.update(deepcopy(updates))
-            if "processing_status" in updates and updates["processing_status"] not in {"received", "processing"}:
+            processing_state = updates.get("processing_state")
+            if processing_state and processing_state not in {"received", "processing"}:
                 event["processed_at"] = datetime.now(timezone.utc)
             self._save()
 
@@ -141,6 +198,18 @@ class InMemoryStore:
         with self._lock:
             events = [deepcopy(event) for event in self._provider_events.values()]
         return sorted(events, key=lambda event: event["received_at"], reverse=True)
+
+    def list_provider_events_for_dispute(
+        self,
+        provider: str,
+        provider_dispute_id: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            event
+            for event in self.list_provider_events()
+            if event.get("provider") == provider
+            and event.get("provider_dispute_id") == provider_dispute_id
+        ]
 
     def create_simulator_dispute(self, dispute: dict[str, Any]) -> bool:
         dispute_id = str(dispute["dispute_id"])

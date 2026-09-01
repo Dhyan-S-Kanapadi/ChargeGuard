@@ -407,21 +407,64 @@ When `CHARGEGUARD_USE_STUBS=true`, deterministic evidence is returned for local 
 
 For multiple merchants, set a non-secret `support_connector_ref` such as `ACME` when creating the merchant. ChargeGuard first reads `CHARGEGUARD_CONNECTOR_ACME_GMAIL_ACCESS_TOKEN`, `CHARGEGUARD_CONNECTOR_ACME_GMAIL_USER_ID`, `CHARGEGUARD_CONNECTOR_ACME_FRESHDESK_API_KEY`, and `CHARGEGUARD_CONNECTOR_ACME_FRESHDESK_DOMAIN`, then falls back to the global variables above. Merchant fields `gmail_user_id` and `freshdesk_domain` override their corresponding environment values; credentials remain outside API payloads and responses.
 
-## Razorpay Dispute Webhooks And Local Simulator
+## Razorpay Dispute Webhooks
 
-`POST /webhook/razorpay` receives Razorpay-shaped dispute events without `X-API-Key`. It authenticates the exact raw body with `HMAC-SHA256(raw_body, RAZORPAY_WEBHOOK_SECRET)` and `X-Razorpay-Signature`; this secret is distinct from `RAZORPAY_KEY_SECRET`, which is only for outgoing Razorpay API requests. Register a Razorpay merchant with its `razorpay_account_id` so the event's top-level `account_id` can be resolved safely.
+Use dispute webhooks for primary real-time detection and the direct Razorpay REST API for reconciliation and operator-approved dispute actions. Razorpay MCP is not part of the ingestion path because its documented tools do not expose dispute webhook ingestion.
 
-The adapter supports `payment.dispute.created`, `action_required`, `under_review`, `won`, `lost`, and `closed`. It stores only a payload hash for idempotency, converts paise to major units, and keeps Razorpay's provider reason code separate from the card-network reason code in payment notes. Unmapped events are acknowledged without guessing a network code.
+Configure the Razorpay Dashboard webhook callback as:
 
-For a free local simulation, set `ENVIRONMENT=development`, `CHARGEBACK_SIMULATOR_ENABLED=true`, `RAZORPAY_WEBHOOK_SECRET` and `API_KEY`, then start ChargeGuard and run:
+```text
+https://<your-public-host>/webhook/razorpay
+```
+
+Enable all six events: `payment.dispute.created`, `payment.dispute.action_required`, `payment.dispute.under_review`, `payment.dispute.won`, `payment.dispute.lost`, and `payment.dispute.closed`. Set the same webhook secret in the Dashboard and `RAZORPAY_WEBHOOK_SECRET`. The webhook secret is different from `RAZORPAY_KEY_SECRET`, which authenticates outgoing REST requests. Test/live behavior is selected by the Razorpay key pair (`rzp_test_...` versus live keys); use Test mode for staging.
+
+The endpoint has no `X-API-Key` dependency because Razorpay authenticates with `X-Razorpay-Signature`. ChargeGuard verifies HMAC-SHA256 over the exact raw body before parsing, limits body size, uses `x-razorpay-event-id` for idempotency, and falls back to a deterministic payload hash when that header is absent. It stores payload hashes rather than full webhook bodies. Unknown merchant accounts are acknowledged and recorded as `unresolved` for protected inspection at `GET /internal/razorpay/events?processing_state=unresolved`.
+
+Map a Razorpay account to a merchant before enabling delivery:
+
+```bash
+curl -X POST https://<your-public-host>/merchants \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"merchant_id":"merchant_001","name":"Example Merchant","vertical":"ecommerce","payment_provider":"razorpay","razorpay_account_id":"acc_...","freshdesk_domain":"","average_order_value":2500,"chargeback_history_count":0}'
+```
+
+Provider `reason_code` remains a Razorpay reason and is never translated into a Visa, Mastercard, or RuPay reason code. Card network is used only when present in an expanded card object or obtained through `GET /v1/payments/:id?expand[]=card`. UPI is recorded as `payment_rail=UPI` with no card network; it is never treated as RuPay. Cases without a reliable card network and supported network playbook are ingested and routed to human review.
+
+### Reconciliation
+
+Webhooks are primary. A protected reconciliation endpoint catches missed events and status drift through `GET /v1/disputes` and the same normalization/upsert path:
+
+```bash
+curl -X POST http://127.0.0.1:8000/internal/razorpay/reconcile \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"merchant_id":"merchant_001","count":100}'
+```
+
+`RazorpayClient` also provides tested fetch, accept, contest, expanded-payment, and dispute-evidence document methods using Razorpay Basic Authentication. Accept and contest are irreversible operator actions and are not invoked by the simulator.
+
+### Local Razorpay Simulator
+
+Set `ENVIRONMENT=development`, `RAZORPAY_SIMULATOR_ENABLED=true`, `RAZORPAY_WEBHOOK_SECRET`, and `API_KEY`, then start ChargeGuard:
 
 ```bash
 py -m uvicorn main:app --port 8000
-py scripts/simulate_razorpay_chargeback.py
-py scripts/simulate_razorpay_chargeback.py --outcome won
+py scripts/simulate_razorpay_dispute.py card-created
+py scripts/simulate_razorpay_dispute.py upi-created
+py scripts/simulate_razorpay_dispute.py duplicate
+py scripts/simulate_razorpay_dispute.py invalid-signature
+py scripts/simulate_razorpay_dispute.py unknown-merchant
+py scripts/simulate_razorpay_dispute.py expired
+py scripts/simulate_razorpay_dispute.py out-of-order
 ```
 
-The authenticated local routes are `POST /dev/razorpay-simulator/disputes`, `POST /dev/razorpay-simulator/disputes/{id}/transition`, and the two list routes under the same prefix. The simulator is disabled by default, returns 404 in production, and only posts signed payloads to `RAZORPAY_SIMULATOR_TARGET_URL`; it never calls Razorpay. `disp_SIM_...` IDs are local and do not exist in Razorpay, so they cannot be used with Razorpay's real accept/contest APIs. Disable the simulator by setting `CHARGEBACK_SIMULATOR_ENABLED=false`.
+Lifecycle scenarios are `action-required`, `under-review`, `won`, `lost`, and `closed`. The simulator signs the exact JSON sent to the real `/webhook/razorpay` endpoint. Both the script and development router reject production mode, and simulator delivery is restricted to a loopback `/webhook/razorpay` URL. It never contacts Razorpay or creates a real dispute; `disp_SIM_...` IDs exist only in ChargeGuard.
+
+Run Razorpay-focused tests with `py -m pytest -q tests/test_razorpay_webhooks.py tests/test_razorpay_integration.py tests/test_razorpay_reconciliation.py tests/test_razorpay_simulator.py`.
+
+The current synchronized store is adequate for one-process staging when `CHARGEGUARD_STORE_PATH` is configured. Production multi-worker deployment must replace it with a shared transactional database plus a queue/outbox so event claims and workflow scheduling remain atomic across processes.
 
 ## Generated Outputs
 

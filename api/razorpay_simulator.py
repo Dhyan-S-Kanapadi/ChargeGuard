@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -38,7 +39,10 @@ _ALLOWED_TRANSITIONS = {
 
 
 def _simulator_enabled() -> bool:
-    return os.getenv("CHARGEBACK_SIMULATOR_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    value = os.getenv("RAZORPAY_SIMULATOR_ENABLED")
+    if value is None:
+        value = os.getenv("CHARGEBACK_SIMULATOR_ENABLED", "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _require_simulator() -> None:
@@ -56,20 +60,30 @@ def _secret() -> str:
 def build_simulator_envelope(record: dict[str, Any], event_name: str, state: str) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     dispute_status = {"action_required": "open", "under_review": "under_review", "won": "won", "lost": "lost", "closed": "closed"}.get(state, "open")
+    notes = {
+        "chargeguard_simulator": True,
+        "chargeguard_network_reason_code": record.get("network_reason_code"),
+    }
+    if record.get("card_network"):
+        notes["chargeguard_card_network"] = record["card_network"]
+    payment = {
+        "id": record["payment_id"], "entity": "payment", "amount": record["payment_amount_paise"],
+        "currency": record["currency"], "status": "captured", "order_id": record["order_id"],
+        "method": record["method"], "captured": True,
+        "email": record.get("customer_email"), "contact": record.get("customer_contact"),
+        "notes": notes, "created_at": int(record["created_at"].timestamp()),
+    }
+    if record["method"] == "card" and record.get("card_network"):
+        payment["card"] = {"network": record["card_network"]}
+    if record["method"] == "upi":
+        payment["vpa"] = record.get("vpa")
     return {
         "entity": "event",
         "account_id": record["account_id"],
         "event": event_name,
         "contains": ["payment", "dispute"],
         "payload": {
-            "payment": {"entity": {
-                "id": record["payment_id"], "entity": "payment", "amount": record["payment_amount_paise"],
-                "currency": record["currency"], "status": "captured", "order_id": record["order_id"],
-                "method": record["method"], "captured": True, "vpa": record.get("vpa"),
-                "email": record.get("customer_email"), "contact": record.get("customer_contact"),
-                "notes": {"chargeguard_card_network": record["card_network"], "chargeguard_network_reason_code": record["network_reason_code"], "simulation": "true"},
-                "created_at": int(record["created_at"].timestamp()),
-            }},
+            "payment": {"entity": payment},
             "dispute": {"entity": {
                 "id": record["dispute_id"], "entity": "dispute", "payment_id": record["payment_id"],
                 "amount": record["dispute_amount_paise"], "currency": record["currency"],
@@ -91,6 +105,13 @@ def deliver_simulator_event(
     *,
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
+    parsed_target = urlparse(target_url)
+    if (
+        parsed_target.scheme not in {"http", "https"}
+        or parsed_target.hostname not in {"127.0.0.1", "localhost", "::1"}
+        or parsed_target.path != "/webhook/razorpay"
+    ):
+        raise ValueError("Razorpay simulator target must be a loopback HTTP(S) URL.")
     signature = hmac.new(webhook_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     headers = {
         "Content-Type": "application/json",
@@ -136,6 +157,8 @@ def create_simulated_dispute(payload: RazorpaySimulatorCreate) -> dict[str, Any]
         raise HTTPException(status_code=422, detail="Merchant must have a Razorpay provider and account ID.")
     if payload.dispute_amount_paise > payload.payment_amount_paise:
         raise HTTPException(status_code=422, detail="Dispute amount cannot exceed payment amount.")
+    if payload.method == "card" and payload.card_network is None:
+        raise HTTPException(status_code=422, detail="Card simulations require card_network.")
     now = datetime.now(timezone.utc)
     record = {
         **payload.model_dump(),
@@ -159,7 +182,7 @@ def transition_simulated_dispute(dispute_id: str, payload: RazorpaySimulatorTran
     record = store.get_simulator_dispute(dispute_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Simulated dispute not found.")
-    if payload.state not in _ALLOWED_TRANSITIONS.get(record["state"], set()):
+    if not payload.force and payload.state not in _ALLOWED_TRANSITIONS.get(record["state"], set()):
         raise HTTPException(status_code=409, detail="Invalid simulated dispute transition.")
     result = _deliver(record, _EVENTS[payload.state], payload.state)
     record["deliveries"].append(result)
