@@ -101,14 +101,23 @@ class ChargebackState(TypedDict):
     chargeback_received_at: NotRequired[datetime]
     card_fingerprint: NotRequired[str]
     provider: NotRequired[str]
+    provider_dispute_id: NotRequired[str]
     provider_event_id: NotRequired[str]
+    webhook_event_id: NotRequired[str]
+    provider_event: NotRequired[str]
+    provider_event_timestamp: NotRequired[datetime]
     provider_dispute_status: NotRequired[str]
+    provider_status: NotRequired[str]
     provider_phase: NotRequired[str]
     provider_reason_code: NotRequired[str]
+    network_reason_code: NotRequired[str]
     provider_account_id: NotRequired[str]
     provider_respond_by: NotRequired[datetime]
+    payment_rail: NotRequired[str]
+    deadline_overdue: NotRequired[bool]
+    provider_action_required: NotRequired[bool]
     reason_code: str
-    card_network: Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"]
+    card_network: Optional[Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"]]
     dispute_amount: float
     currency: str
     filing_deadline: datetime

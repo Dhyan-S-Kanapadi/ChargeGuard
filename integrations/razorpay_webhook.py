@@ -1,43 +1,58 @@
-"""Verification and safe extraction for inbound Razorpay dispute webhooks."""
+"""Verification and normalization for inbound Razorpay dispute webhooks."""
 
 from datetime import datetime, timezone
+from decimal import Decimal
 import hashlib
 import hmac
-import json
 import os
 from typing import Any
+
+from pydantic import ValidationError
+
+from integrations.razorpay_schemas import (
+    NormalizedRazorpayDispute,
+    RazorpayEventHeader,
+    RazorpayPaymentEntity,
+    RazorpayWebhookEnvelope,
+)
 
 
 class RazorpayWebhookError(ValueError):
     """Raised when a signed Razorpay event is structurally unusable."""
 
 
-def verify_signature(raw_body: bytes, signature: str | None, secret: str | None = None) -> bool:
+def verify_signature(
+    raw_body: bytes,
+    signature: str | None,
+    secret: str | None = None,
+) -> bool:
     if not signature:
         return False
     webhook_secret = secret if secret is not None else os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
     if not webhook_secret:
         return False
-    expected = hmac.new(webhook_secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    expected = hmac.new(
+        webhook_secret.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
     return hmac.compare_digest(expected, signature)
 
 
-def parse_envelope(raw_body: bytes) -> dict[str, Any]:
+def parse_envelope(raw_body: bytes) -> RazorpayWebhookEnvelope:
     try:
-        payload = json.loads(raw_body)
-    except json.JSONDecodeError as exc:
-        raise RazorpayWebhookError("Webhook body was not valid JSON.") from exc
-    if not isinstance(payload, dict) or payload.get("entity") != "event":
-        raise RazorpayWebhookError("Webhook body was not a Razorpay event envelope.")
-    if not isinstance(payload.get("payload"), dict):
-        raise RazorpayWebhookError("Webhook event did not include payload.")
-    return payload
+        return RazorpayWebhookEnvelope.model_validate_json(raw_body)
+    except ValidationError as exc:
+        raise RazorpayWebhookError(
+            "Webhook body was not a valid Razorpay dispute event."
+        ) from exc
 
 
-def entity(envelope: dict[str, Any], name: str) -> dict[str, Any]:
-    value = envelope.get("payload", {}).get(name, {})
-    result = value.get("entity") if isinstance(value, dict) else None
-    return result if isinstance(result, dict) else {}
+def parse_event_header(raw_body: bytes) -> RazorpayEventHeader:
+    try:
+        return RazorpayEventHeader.model_validate_json(raw_body)
+    except ValidationError as exc:
+        raise RazorpayWebhookError("Webhook body was not a valid Razorpay event.") from exc
 
 
 def utc_timestamp(value: Any) -> datetime | None:
@@ -49,28 +64,104 @@ def utc_timestamp(value: Any) -> datetime | None:
         raise RazorpayWebhookError("Invalid Razorpay timestamp.") from exc
 
 
-def mapped_values(envelope: dict[str, Any]) -> dict[str, Any]:
-    payment = entity(envelope, "payment")
-    dispute = entity(envelope, "dispute")
-    notes = payment.get("notes") if isinstance(payment.get("notes"), dict) else {}
-    amount = dispute.get("amount")
-    if not dispute.get("id") or not isinstance(amount, int) or amount <= 0:
-        raise RazorpayWebhookError("Webhook dispute is missing required id or amount.")
-    return {
-        "chargeback_id": str(dispute["id"]),
-        "payment_id": str(dispute.get("payment_id") or payment.get("id") or ""),
-        "order_id": str(payment.get("order_id") or ""),
-        "dispute_amount": amount / 100,
-        "currency": str(dispute.get("currency") or payment.get("currency") or "").upper(),
-        "filing_deadline": utc_timestamp(dispute.get("respond_by")),
-        "card_network": notes.get("chargeguard_card_network"),
-        "network_reason_code": notes.get("chargeguard_network_reason_code"),
-        "provider_reason_code": dispute.get("reason_code"),
-        "provider_dispute_status": dispute.get("status"),
-        "provider_phase": dispute.get("phase"),
-        "provider_respond_by": utc_timestamp(dispute.get("respond_by")),
-    }
-
-
 def payload_sha256(raw_body: bytes) -> str:
     return hashlib.sha256(raw_body).hexdigest()
+
+
+def _payment_rail(method: str | None) -> str | None:
+    if not method:
+        return None
+    return {
+        "card": "CARD",
+        "upi": "UPI",
+        "netbanking": "NETBANKING",
+        "wallet": "WALLET",
+        "emi": "EMI",
+        "paylater": "PAYLATER",
+    }.get(method.strip().lower(), method.strip().upper())
+
+
+def _card_network(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = value.replace(" ", "").replace("-", "").upper()
+    return {
+        "VISA": "VISA",
+        "MASTERCARD": "MASTERCARD",
+        "MAESTRO": "MASTERCARD",
+        "RUPAY": "RUPAY",
+        "AMEX": "AMEX",
+        "AMERICANEXPRESS": "AMEX",
+    }.get(normalized)
+
+
+def _merged_payment(
+    envelope: RazorpayWebhookEnvelope,
+    enriched_payment: dict[str, Any] | None,
+) -> RazorpayPaymentEntity | None:
+    webhook_payment = envelope.payload.payment.entity if envelope.payload.payment else None
+    if enriched_payment is None:
+        return webhook_payment
+    merged = dict(enriched_payment)
+    if webhook_payment is not None:
+        webhook_values = webhook_payment.model_dump(exclude_none=True)
+        merged.update(webhook_values)
+        if enriched_payment.get("card") and not webhook_values.get("card"):
+            merged["card"] = enriched_payment["card"]
+    try:
+        return RazorpayPaymentEntity.model_validate(merged)
+    except ValidationError as exc:
+        raise RazorpayWebhookError("Razorpay payment enrichment was invalid.") from exc
+
+
+def normalize_dispute(
+    envelope: RazorpayWebhookEnvelope,
+    *,
+    webhook_event_id: str,
+    enriched_payment: dict[str, Any] | None = None,
+    enrichment_failure_reason: str | None = None,
+    allow_simulator_metadata: bool = False,
+    now: datetime | None = None,
+) -> NormalizedRazorpayDispute:
+    dispute = envelope.payload.dispute.entity
+    payment = _merged_payment(envelope, enriched_payment)
+    deadline = utc_timestamp(dispute.respond_by)
+    event_timestamp = utc_timestamp(envelope.created_at)
+    current_time = now or datetime.now(timezone.utc)
+    rail = _payment_rail(payment.method if payment else None)
+    network = _card_network(
+        payment.card.network if payment and payment.card is not None else None
+    )
+    network_reason_code = None
+    if allow_simulator_metadata and payment is not None:
+        network = network or _card_network(
+            str(payment.notes.get("chargeguard_card_network") or "")
+        )
+        network_reason_code = str(
+            payment.notes.get("chargeguard_network_reason_code") or ""
+        ) or None
+    if rail != "CARD":
+        network = None
+
+    return NormalizedRazorpayDispute(
+        provider_dispute_id=dispute.id,
+        chargeback_id=dispute.id,
+        payment_id=dispute.payment_id,
+        order_id=payment.order_id if payment else None,
+        dispute_amount=Decimal(dispute.amount) / Decimal("100"),
+        currency=dispute.currency.upper(),
+        filing_deadline=deadline,
+        deadline_overdue=deadline is not None and deadline <= current_time,
+        provider_reason_code=dispute.reason_code,
+        network_reason_code=network_reason_code,
+        payment_rail=rail,
+        card_network=network,
+        provider_status=dispute.status,
+        provider_phase=dispute.phase,
+        provider_event=envelope.event,
+        provider_account_id=envelope.account_id,
+        webhook_event_id=webhook_event_id,
+        provider_event_timestamp=event_timestamp,
+        enrichment_degraded=enrichment_failure_reason is not None,
+        enrichment_failure_reason=enrichment_failure_reason,
+    )

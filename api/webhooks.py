@@ -75,19 +75,56 @@ def _initial_state(
     merchant_profile,
 ) -> ChargebackState:
     received_at = datetime.now(timezone.utc)
-    state: ChargebackState = {
-        "chargeback_id": payload.chargeback_id,
-        "order_id": payload.order_id,
-        "payment_id": payload.payment_id,
-        "reason_code": payload.reason_code,
-        "card_network": payload.card_network,
-        "dispute_amount": payload.dispute_amount,
-        "currency": payload.currency,
-        "filing_deadline": filing_deadline_for_network(
+    return build_initial_state(
+        chargeback_id=payload.chargeback_id,
+        order_id=payload.order_id,
+        payment_id=payload.payment_id,
+        reason_code=payload.reason_code,
+        card_network=payload.card_network,
+        dispute_amount=payload.dispute_amount,
+        currency=payload.currency,
+        filing_deadline=filing_deadline_for_network(
             payload.card_network,
             received_at=received_at,
             provided_deadline=payload.filing_deadline,
         ),
+        merchant_profile=merchant_profile,
+        received_at=received_at,
+        evidence_collection_degraded=payload.simulate_evidence_degraded,
+        degraded_reasons=(
+            ["demo_simulation"] if payload.simulate_evidence_degraded else []
+        ),
+        tracking_id=payload.tracking_id,
+        card_fingerprint=payload.card_fingerprint,
+    )
+
+
+def build_initial_state(
+    *,
+    chargeback_id: str,
+    order_id: str | None,
+    payment_id: str,
+    reason_code: str,
+    card_network: str | None,
+    dispute_amount: float,
+    currency: str,
+    filing_deadline: datetime,
+    merchant_profile,
+    received_at: datetime | None = None,
+    evidence_collection_degraded: bool = False,
+    degraded_reasons: list[str] | None = None,
+    tracking_id: str | None = None,
+    card_fingerprint: str | None = None,
+) -> ChargebackState:
+    received_at = received_at or datetime.now(timezone.utc)
+    state: ChargebackState = {
+        "chargeback_id": chargeback_id,
+        "payment_id": payment_id,
+        "reason_code": reason_code,
+        "card_network": card_network,
+        "dispute_amount": dispute_amount,
+        "currency": currency,
+        "filing_deadline": filing_deadline,
         "chargeback_received_at": received_at,
         "merchant_profile": merchant_profile,
         "investigation_plan": {},
@@ -99,10 +136,8 @@ def _initial_state(
         "consortium": None,
         "delivery_photo": None,
         "order_timeline": None,
-        "evidence_collection_degraded": payload.simulate_evidence_degraded,
-        "degraded_reasons": (
-            ["demo_simulation"] if payload.simulate_evidence_degraded else []
-        ),
+        "evidence_collection_degraded": evidence_collection_degraded,
+        "degraded_reasons": list(degraded_reasons or []),
         "win_probability": None,
         "expected_value": None,
         "decision": None,
@@ -117,10 +152,12 @@ def _initial_state(
         "outcome_reason": None,
         "outcome_recorded_at": None,
     }
-    if payload.tracking_id:
-        state["tracking_id"] = payload.tracking_id
-    if payload.card_fingerprint:
-        state["card_fingerprint"] = payload.card_fingerprint
+    if order_id:
+        state["order_id"] = order_id
+    if tracking_id:
+        state["tracking_id"] = tracking_id
+    if card_fingerprint:
+        state["card_fingerprint"] = card_fingerprint
     return state
 
 

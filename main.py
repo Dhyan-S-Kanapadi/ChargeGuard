@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from api.assistant import router as assistant_router
 from api.disputes import router as disputes_router
 from api.merchants import router as merchants_router
+from api.razorpay_admin import router as razorpay_admin_router
 from api.razorpay_simulator import router as razorpay_simulator_router
 from api.razorpay_webhooks import router as razorpay_webhooks_router
 from api.stats import router as stats_router
@@ -20,6 +21,7 @@ app.include_router(disputes_router)
 app.include_router(merchants_router)
 app.include_router(stats_router)
 app.include_router(assistant_router)
+app.include_router(razorpay_admin_router)
 app.include_router(razorpay_webhooks_router)
 app.include_router(razorpay_simulator_router)
 app.mount("/dashboard", StaticFiles(directory="static", html=True), name="dashboard")

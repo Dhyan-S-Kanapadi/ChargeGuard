@@ -4,7 +4,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
-from agents.learning import learning_agent
 from analytics.merchant_stats import merchant_dispute_ratio
 from api.auth import require_api_key
 from api.schemas import (
@@ -15,7 +14,11 @@ from api.schemas import (
     OutcomeUpdate,
 )
 from api.store import store
-from core.state import is_filed_dispute
+from core.outcomes import (
+    OutcomeConflictError,
+    OutcomeNotEligibleError,
+    record_adjudicated_outcome,
+)
 from integrations.case_summary import generate_case_summary
 
 
@@ -103,10 +106,14 @@ def get_dispute(
         third_party_fraud_indicators=state.get("third_party_fraud_indicators"),
         identity_continuity=state.get("identity_continuity"),
         human_review_summary=state.get("human_review_summary"),
-        merchant_dispute_ratio=merchant_dispute_ratio(
-            merchant,
-            store.list_disputes(),
-            state["card_network"],
+        merchant_dispute_ratio=(
+            merchant_dispute_ratio(
+                merchant,
+                store.list_disputes(),
+                state["card_network"],
+            )
+            if state.get("card_network")
+            else None
         ),
     )
 
@@ -135,16 +142,14 @@ def record_dispute_outcome(
         raise HTTPException(status_code=409, detail="Dispute processing is not complete.")
 
     state = record["state"]
-    if state.get("final_outcome") in {"WIN", "LOSS"}:
-        raise HTTPException(status_code=409, detail="Final outcome already recorded.")
-    if not is_filed_dispute(state):
-        raise HTTPException(
-            status_code=409,
-            detail="Only filed representment disputes can record adjudicated outcomes.",
+    try:
+        state, _ = record_adjudicated_outcome(
+            state,
+            payload.outcome,
+            payload.reason,
         )
-    state["final_outcome"] = payload.outcome
-    state["outcome_reason"] = payload.reason
-    state = learning_agent(state)
+    except (OutcomeConflictError, OutcomeNotEligibleError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     store.update_dispute(chargeback_id, status="completed", state=state)
     return OutcomeResponse(
         chargeback_id=chargeback_id,
