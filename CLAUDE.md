@@ -23,7 +23,7 @@ The product is India-first. INR is the default operating currency, Razorpay is t
 - Persistence: process-local synchronized store, optionally persisted to one JSON file
 - Deployment: Dockerfile plus a single-service `docker-compose.yml`
 - CI: `.github/workflows/ci.yml`, Python 3.11, Poetry, full pytest suite
-- Last verified baseline at commit `2b0c1c4`: `198 passed`
+- Last verified full-suite baseline at commit `6a76f1f`: `221 passed`
 
 The pass count is a historical checkpoint, not a permanent expectation. Always run the current suite and report the current result.
 
@@ -282,6 +282,8 @@ Dispute responses remove nested evidence `raw` objects and transaction email, IP
 
 The background processor atomically moves `queued` to `processing`, resolves the merchant, enriches missing payment/card data, normalizes and upserts the dispute, schedules the graph only when eligible, and records a terminal provider-event state. `received`, `queued`, and `processing` never have `processed_at`; terminal states do. Failed, unresolved, queued, and stale-processing events are recoverable through the protected internal endpoints.
 
+Application startup schedules one bounded recovery pass without delaying API startup. `RAZORPAY_RECOVER_PENDING_ON_STARTUP=true` enables it, and `RAZORPAY_STARTUP_RECOVERY_LIMIT=25` controls the batch size within the enforced range of 1-100. Recovery can reclaim received, queued, failed, stale-processing, and newly resolvable events; it must never replay successful or ignored events.
+
 Do not parse and reserialize the body before signature verification. Do not add `X-API-Key` authentication to this endpoint.
 
 ### Enabled events
@@ -335,14 +337,37 @@ Accept and contest are consequential provider actions. They are client capabilit
 
 Never commit `.env`, API keys, webhook secrets, access tokens, customer PII, or generated provider payloads. `.env` is Git-ignored. `.env.example` must contain placeholders only.
 
+`.env.example` is the complete configuration catalog; a developer's `.env` may contain only the settings needed for that machine. Their values are expected to differ: `.env.example` uses safe development/stub defaults, while `.env` can select live Test Mode providers and contains local secrets. When configuration changes, add or remove variable names in `.env.example`, but never copy values from `.env`.
+
+Current configuration groups are:
+
+| Group | Variables |
+| --- | --- |
+| Runtime | `ENVIRONMENT`, `PORT`, `CHARGEGUARD_API_URL` |
+| API security | `API_KEY`, `INTERNAL_API_TOKEN` |
+| Rate limits | `WEBHOOK_RATE_LIMIT_PER_MINUTE`, `ASSISTANT_RATE_LIMIT_PER_MINUTE` |
+| Provider mode | `CHARGEGUARD_USE_STUBS` and each provider's `*_USE_STUBS` override |
+| Razorpay | REST credentials, webhook controls, claim timeout, startup recovery, and simulator controls |
+| Persistence/output | `CHARGEGUARD_STORE_PATH`, `REBUTTAL_OUTPUT_DIR` |
+| ML/feedback | model, outcome, metadata, playbook-stat paths, retraining threshold, and synthetic-data decay |
+| Decision economics | response costs, FX rates, and `FIGHT_EV_THRESHOLD` |
+| Evidence providers | Stripe, Shiprocket, Delhivery, Freshdesk, Gmail, SEON, Ethoca, Verifi, and food-platform settings |
+| Merchant support connectors | `CHARGEGUARD_CONNECTOR_<REF>_<SETTING>` variables selected by `support_connector_ref` |
+| Optional LLMs | Anthropic credential, model names, feature enablement, and per-feature stub controls |
+| Monitoring | Visa, Mastercard, RuPay, and AMEX dispute-ratio thresholds |
+
 Minimum deterministic local configuration:
 
 ```env
 ENVIRONMENT=development
+PORT=8000
+CHARGEGUARD_API_URL=http://127.0.0.1:8000
 API_KEY=replace-with-a-local-key
 CHARGEGUARD_USE_STUBS=true
 RAZORPAY_WEBHOOK_SECRET=replace-with-a-local-webhook-secret
 RAZORPAY_WEBHOOK_ENABLED=true
+RAZORPAY_RECOVER_PENDING_ON_STARTUP=true
+RAZORPAY_STARTUP_RECOVERY_LIMIT=25
 RAZORPAY_SIMULATOR_ENABLED=true
 MODEL_PATH=./ml/artifacts/win_probability_model.pkl
 CHARGEGUARD_STORE_PATH=./data/chargeguard_store.json
@@ -354,7 +379,10 @@ Razorpay Test Mode additionally requires:
 RAZORPAY_USE_STUBS=false
 RAZORPAY_KEY_ID=rzp_test_...
 RAZORPAY_KEY_SECRET=...
+RAZORPAY_SIMULATOR_ENABLED=false
 ```
+
+Provider-specific `*_USE_STUBS` values may be left blank to inherit `CHARGEGUARD_USE_STUBS`. For India-first Razorpay Test Mode validation, keep the global setting `true`, set only `RAZORPAY_USE_STUBS=false`, and leave unrelated providers stubbed until their credentials and test plans are ready.
 
 The webhook secret is separate from the API key secret:
 
