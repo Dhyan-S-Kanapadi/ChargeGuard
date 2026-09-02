@@ -43,10 +43,26 @@ def test_env_example_has_safe_staging_placeholders() -> None:
     assert values["RAZORPAY_WEBHOOK_ENABLED"] == "true"
     assert values["RAZORPAY_WEBHOOK_MAX_BODY_BYTES"] == "1048576"
     assert values["PROVIDER_EVENT_CLAIM_TIMEOUT_SECONDS"] == "300"
+    assert values["RAZORPAY_RECOVER_PENDING_ON_STARTUP"] == "true"
+    assert values["RAZORPAY_STARTUP_RECOVERY_LIMIT"] == "25"
     assert values["RAZORPAY_SIMULATOR_ENABLED"] == "false"
     assert values["CHARGEGUARD_STORE_PATH"] == ""
     assert values["CHARGEGUARD_USE_STUBS"] == "true"
     assert values["MODEL_PATH"] == "./ml/artifacts/win_probability_model.pkl"
+
+
+def test_ci_builds_and_smoke_tests_docker_image() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "docker compose config" in workflow
+    assert "docker build -t chargeguard-ci ." in workflow
+    assert "--name chargeguard-ci" in workflow
+    assert "curl --fail --silent http://127.0.0.1:8000/health" in workflow
+    assert 'health["model_loaded"] is True' in workflow
+    assert 'health["stub_mode"] is True' in workflow
+    assert "if: always()" in workflow
+    assert "docker rm -f chargeguard-ci" in workflow
 
 
 def test_production_startup_warns_about_missing_and_single_process_store(

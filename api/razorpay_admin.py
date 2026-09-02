@@ -1,6 +1,10 @@
 """Protected Razorpay operations for reconciliation and event remediation."""
 
+from collections.abc import Callable
 from datetime import datetime, timezone
+import logging
+import os
+from threading import Lock, Thread
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -20,7 +24,10 @@ from integrations.razorpay import (
     RazorpayRequestError,
 )
 from integrations.razorpay_schemas import RazorpayWebhookEnvelope
-from integrations.razorpay_webhook import normalize_dispute
+from integrations.razorpay_webhook import (
+    normalize_dispute,
+    serialize_envelope_for_processing,
+)
 
 
 router = APIRouter(
@@ -28,7 +35,11 @@ router = APIRouter(
     tags=["razorpay-internal"],
     dependencies=[Depends(require_api_key)],
 )
+logger = logging.getLogger(__name__)
 _MAX_RECOVERY_BATCH_SIZE = 100
+_DEFAULT_STARTUP_RECOVERY_LIMIT = 25
+_STARTUP_RECOVERY_LOCK = Lock()
+_startup_recovery_started = False
 _PUBLIC_EVENT_FIELDS = (
     "event_id",
     "provider_event_id",
@@ -65,6 +76,112 @@ def _safe_event_response(event: dict[str, Any]) -> dict[str, Any]:
 
 def _enqueue_event(background_tasks: BackgroundTasks, event_id: str) -> None:
     background_tasks.add_task(process_razorpay_provider_event, event_id)
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _startup_recovery_limit() -> int:
+    try:
+        configured = int(
+            os.getenv(
+                "RAZORPAY_STARTUP_RECOVERY_LIMIT",
+                str(_DEFAULT_STARTUP_RECOVERY_LIMIT),
+            )
+        )
+    except ValueError:
+        logger.warning(
+            "Invalid RAZORPAY_STARTUP_RECOVERY_LIMIT; using default",
+            extra={"default_limit": _DEFAULT_STARTUP_RECOVERY_LIMIT},
+        )
+        configured = _DEFAULT_STARTUP_RECOVERY_LIMIT
+    return min(_MAX_RECOVERY_BATCH_SIZE, max(1, configured))
+
+
+def recover_pending_razorpay_events(
+    *,
+    limit: int,
+    schedule_event: Callable[[str], None],
+) -> dict[str, int]:
+    """Queue a bounded set of persisted events without exposing their payloads."""
+    bounded_limit = min(_MAX_RECOVERY_BATCH_SIZE, max(1, limit))
+    events = store.list_recoverable_provider_events(
+        provider="razorpay",
+        limit=bounded_limit,
+    )
+    scheduled = 0
+    skipped = 0
+    failed = 0
+    for event in events:
+        event_id = str(event["event_id"])
+        if event.get("processing_state") == "unresolved" and not (
+            event.get("account_id")
+            and store.get_merchant_by_razorpay_account_id(event["account_id"])
+        ):
+            skipped += 1
+            continue
+        if not store.requeue_provider_event(event_id):
+            skipped += 1
+            continue
+        try:
+            schedule_event(event_id)
+            scheduled += 1
+        except Exception as exc:
+            store.update_provider_event(
+                event_id,
+                processing_state="failed",
+                failure_reason=safe_razorpay_failure_reason(exc),
+            )
+            failed += 1
+    return {
+        "considered": len(events),
+        "scheduled": scheduled,
+        "skipped": skipped,
+        "failed": failed,
+    }
+
+
+def _startup_recovery_worker(limit: int) -> None:
+    result = recover_pending_razorpay_events(
+        limit=limit,
+        schedule_event=process_razorpay_provider_event,
+    )
+    logger.info("Razorpay startup recovery completed", extra=result)
+
+
+def schedule_startup_razorpay_recovery() -> bool:
+    """Start one non-blocking recovery worker when startup recovery is enabled."""
+    global _startup_recovery_started
+    if not _env_flag("RAZORPAY_RECOVER_PENDING_ON_STARTUP", True):
+        return False
+    with _STARTUP_RECOVERY_LOCK:
+        if _startup_recovery_started:
+            return False
+        _startup_recovery_started = True
+    try:
+        Thread(
+            target=_startup_recovery_worker,
+            args=(_startup_recovery_limit(),),
+            name="razorpay-startup-recovery",
+            daemon=True,
+        ).start()
+    except Exception:
+        with _STARTUP_RECOVERY_LOCK:
+            _startup_recovery_started = False
+        logger.error("Unable to start Razorpay startup recovery worker")
+        return False
+    return True
+
+
+def reset_startup_recovery_state() -> None:
+    """Reset process-local startup state for tests."""
+    global _startup_recovery_started
+    with _STARTUP_RECOVERY_LOCK:
+        _startup_recovery_started = False
 
 
 def _event_for_status(status: str) -> str:
@@ -138,34 +255,10 @@ def process_pending_razorpay_events(
     background_tasks: BackgroundTasks,
     limit: int = Query(default=25, ge=1, le=_MAX_RECOVERY_BATCH_SIZE),
 ) -> dict[str, int]:
-    events = store.list_recoverable_provider_events(
-        provider="razorpay",
+    return recover_pending_razorpay_events(
         limit=limit,
+        schedule_event=lambda event_id: _enqueue_event(background_tasks, event_id),
     )
-    scheduled = 0
-    skipped = 0
-    failed = 0
-    for event in events:
-        event_id = str(event["event_id"])
-        if not store.requeue_provider_event(event_id):
-            skipped += 1
-            continue
-        try:
-            _enqueue_event(background_tasks, event_id)
-            scheduled += 1
-        except Exception as exc:
-            store.update_provider_event(
-                event_id,
-                processing_state="failed",
-                failure_reason=safe_razorpay_failure_reason(exc),
-            )
-            failed += 1
-    return {
-        "considered": len(events),
-        "scheduled": scheduled,
-        "skipped": skipped,
-        "failed": failed,
-    }
 
 
 @router.post("/reconcile")
@@ -209,6 +302,12 @@ def reconcile_razorpay_disputes(
         event_name = _event_for_status(str(dispute.get("status") or "open"))
         event_version = dispute.get("updated_at") or dispute.get("created_at") or 0
         event_id = f"reconcile:{dispute_id}:{event_name}:{event_version}"
+        try:
+            envelope = _reconciliation_envelope(dispute, payment, account_id)
+            event_data = serialize_envelope_for_processing(envelope)
+        except Exception:
+            results.append({"status": "invalid", "provider_dispute_id": dispute_id})
+            continue
         claimed = store.claim_provider_event(
             {
                 "event_id": event_id,
@@ -219,6 +318,8 @@ def reconcile_razorpay_disputes(
                 "account_id": account_id,
                 "payload_hash": None,
                 "event_id_source": "reconciliation",
+                "provider_event_timestamp": envelope.created_at,
+                "event_data": event_data,
                 "processing_state": "processing",
                 "received_at": datetime.now(timezone.utc),
             }
@@ -227,7 +328,6 @@ def reconcile_razorpay_disputes(
             results.append({"status": "duplicate", "provider_dispute_id": dispute_id})
             continue
         try:
-            envelope = _reconciliation_envelope(dispute, payment, account_id)
             normalized = normalize_dispute(
                 envelope,
                 webhook_event_id=event_id,

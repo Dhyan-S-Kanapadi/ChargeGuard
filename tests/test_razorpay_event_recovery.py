@@ -6,6 +6,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from api import razorpay_admin
 from api.razorpay_processor import process_razorpay_provider_event
 from api.store import store
 from main import app
@@ -18,11 +19,13 @@ API_KEY = "recovery-api-key"
 @pytest.fixture(autouse=True)
 def reset_store(monkeypatch):
     store.clear()
+    razorpay_admin.reset_startup_recovery_state()
     monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", SECRET)
     monkeypatch.setenv("RAZORPAY_WEBHOOK_ENABLED", "true")
     monkeypatch.setenv("RAZORPAY_SIMULATOR_ENABLED", "true")
     monkeypatch.setenv("API_KEY", API_KEY)
     yield
+    razorpay_admin.reset_startup_recovery_state()
     store.clear()
 
 
@@ -265,6 +268,61 @@ def test_failed_created_event_resumes_its_unfinished_graph(monkeypatch) -> None:
     assert store.get_provider_event("evt_resume")["attempt_count"] == 2
 
 
+def test_real_graph_failure_marks_provider_event_failed_and_retry_resumes(
+    monkeypatch,
+) -> None:
+    assert store.create_merchant(_merchant())
+    response, _ = _queue_without_running(
+        monkeypatch,
+        _raw_event(),
+        "evt_graph_failure",
+    )
+    assert response.status_code == 202
+    calls = []
+
+    def fail_graph(state):
+        calls.append("failed")
+        raise RuntimeError("customer@example.test secret-value")
+
+    monkeypatch.setattr("api.webhooks.chargeback_graph.invoke", fail_graph)
+    first = process_razorpay_provider_event("evt_graph_failure")
+
+    assert first["status"] == "failed"
+    event = store.get_provider_event("evt_graph_failure")
+    dispute = store.get_dispute("disp_SIM_recovery")
+    assert event["processing_state"] == "failed"
+    assert event["processed_at"] is not None
+    assert dispute["status"] == "failed"
+    assert "customer@example.test" not in event["failure_reason"]
+    assert "secret-value" not in event["failure_reason"]
+    assert "customer@example.test" not in dispute["error"]
+    assert "secret-value" not in dispute["error"]
+
+    def complete_graph(state):
+        calls.append("completed")
+        return state
+
+    monkeypatch.setattr("api.webhooks.chargeback_graph.invoke", complete_graph)
+    client = TestClient(app)
+    retry = client.post(
+        "/internal/razorpay/events/evt_graph_failure/retry",
+        headers={"X-API-Key": API_KEY},
+    )
+
+    assert retry.status_code == 200
+    assert store.get_provider_event("evt_graph_failure")["processing_state"] == "scheduled"
+    assert store.get_provider_event("evt_graph_failure")["attempt_count"] == 2
+    assert store.get_dispute("disp_SIM_recovery")["status"] == "completed"
+    assert calls == ["failed", "completed"]
+
+    terminal_retry = client.post(
+        "/internal/razorpay/events/evt_graph_failure/retry",
+        headers={"X-API-Key": API_KEY},
+    )
+    assert terminal_retry.status_code == 409
+    assert calls == ["failed", "completed"]
+
+
 def test_processing_failure_is_terminal_and_sanitized(monkeypatch) -> None:
     response, _ = _queue_without_running(monkeypatch, _raw_event(), "evt_failure")
     assert response.status_code == 202
@@ -405,3 +463,77 @@ def test_process_pending_is_protected_and_bounded(monkeypatch) -> None:
         "/internal/razorpay/process-pending?limit=101",
         headers={"X-API-Key": API_KEY},
     ).status_code == 422
+
+
+def test_startup_recovery_is_enabled_once_and_limit_is_bounded(monkeypatch) -> None:
+    started = []
+
+    class FakeThread:
+        def __init__(self, *, target, args, name, daemon):
+            started.append(
+                {
+                    "target": target,
+                    "args": args,
+                    "name": name,
+                    "daemon": daemon,
+                }
+            )
+
+        def start(self):
+            started[-1]["started"] = True
+
+    monkeypatch.setenv("RAZORPAY_RECOVER_PENDING_ON_STARTUP", "true")
+    monkeypatch.setenv("RAZORPAY_STARTUP_RECOVERY_LIMIT", "1000")
+    monkeypatch.setattr(razorpay_admin, "Thread", FakeThread)
+
+    assert razorpay_admin.schedule_startup_razorpay_recovery() is True
+    assert razorpay_admin.schedule_startup_razorpay_recovery() is False
+    assert len(started) == 1
+    assert started[0]["args"] == (100,)
+    assert started[0]["name"] == "razorpay-startup-recovery"
+    assert started[0]["daemon"] is True
+    assert started[0]["started"] is True
+
+
+def test_startup_recovery_can_be_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("RAZORPAY_RECOVER_PENDING_ON_STARTUP", "false")
+    monkeypatch.setattr(
+        razorpay_admin,
+        "Thread",
+        lambda **kwargs: pytest.fail("disabled recovery must not create a thread"),
+    )
+
+    assert razorpay_admin.schedule_startup_razorpay_recovery() is False
+
+
+def test_startup_recovery_uses_lower_bound_and_skips_unmapped_unresolved(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RAZORPAY_STARTUP_RECOVERY_LIMIT", "0")
+    assert razorpay_admin._startup_recovery_limit() == 1
+    assert store.claim_provider_event(
+        {
+            "event_id": "evt_startup_unresolved",
+            "provider": "razorpay",
+            "event_type": "payment.dispute.created",
+            "account_id": "acc_not_mapped",
+            "processing_state": "unresolved",
+        }
+    )
+    scheduled = []
+
+    result = razorpay_admin.recover_pending_razorpay_events(
+        limit=25,
+        schedule_event=scheduled.append,
+    )
+
+    assert result == {
+        "considered": 1,
+        "scheduled": 0,
+        "skipped": 1,
+        "failed": 0,
+    }
+    assert scheduled == []
+    assert store.get_provider_event("evt_startup_unresolved")["processing_state"] == (
+        "unresolved"
+    )

@@ -18,3 +18,46 @@ jobs:
         run: poetry install
       - name: Run tests
         run: poetry run pytest -q
+      - name: Validate Docker Compose configuration
+        run: docker compose config
+      - name: Build Docker image
+        run: docker build -t chargeguard-ci .
+      - name: Start Docker container
+        run: |
+          docker run -d \
+            --name chargeguard-ci \
+            -p 8000:8000 \
+            -e PORT=8000 \
+            -e ENVIRONMENT=production \
+            -e API_KEY=ci-test-api-key \
+            -e RAZORPAY_WEBHOOK_SECRET=ci-test-webhook-secret \
+            -e RAZORPAY_WEBHOOK_ENABLED=true \
+            -e RAZORPAY_SIMULATOR_ENABLED=false \
+            -e CHARGEGUARD_STORE_PATH=/tmp/chargeguard_store.json \
+            -e CHARGEGUARD_USE_STUBS=true \
+            chargeguard-ci
+      - name: Wait for health endpoint
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/health > health.json; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs chargeguard-ci
+          exit 1
+      - name: Validate health response
+        run: |
+          python - <<'PY'
+          import json
+
+          with open("health.json", encoding="utf-8") as handle:
+              health = json.load(handle)
+
+          assert health["status"] == "ok", health
+          assert health["model_loaded"] is True, health
+          assert health["stub_mode"] is True, health
+          PY
+      - name: Stop Docker container
+        if: always()
+        run: docker rm -f chargeguard-ci || true

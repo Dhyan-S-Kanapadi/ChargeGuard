@@ -480,6 +480,8 @@ ChargeGuard supports a recoverable, single-instance Razorpay Test Mode staging d
    RAZORPAY_KEY_SECRET=<test-mode-api-secret>
    RAZORPAY_WEBHOOK_SECRET=<separate-webhook-secret>
    RAZORPAY_WEBHOOK_ENABLED=true
+   RAZORPAY_RECOVER_PENDING_ON_STARTUP=true
+   RAZORPAY_STARTUP_RECOVERY_LIMIT=25
    RAZORPAY_SIMULATOR_ENABLED=false
    CHARGEGUARD_STORE_PATH=/var/data/chargeguard_store.json
    CHARGEGUARD_USE_STUBS=true
@@ -561,7 +563,37 @@ ChargeGuard supports a recoverable, single-instance Razorpay Test Mode staging d
      -d '{"merchant_id":"merchant_001","count":100}'
    ```
 
+### Final Staging Checklist
+
+Required variables are `ENVIRONMENT=production`, a strong `API_KEY`, Razorpay Test Mode `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`, a separate `RAZORPAY_WEBHOOK_SECRET`, `RAZORPAY_WEBHOOK_ENABLED=true`, `RAZORPAY_SIMULATOR_ENABLED=false`, `CHARGEGUARD_USE_STUBS=true`, `MODEL_PATH=./ml/artifacts/win_probability_model.pkl`, and `CHARGEGUARD_STORE_PATH=/var/data/chargeguard_store.json`.
+
+Run one application instance with one worker, mount a persistent volume at `/var/data`, expose `/health`, and configure the public Razorpay callback as `/webhook/razorpay`. Subscribe to `payment.dispute.created`, `payment.dispute.action_required`, `payment.dispute.under_review`, `payment.dispute.won`, `payment.dispute.lost`, and `payment.dispute.closed`.
+
+### Recovery After Restart
+
+By default, one daemon worker schedules up to 25 recoverable Razorpay events after startup. Configure this with `RAZORPAY_RECOVER_PENDING_ON_STARTUP=true` and `RAZORPAY_STARTUP_RECOVERY_LIMIT=25`; the limit is constrained to 1-100. It considers received, queued, failed, stale processing, and unresolved events whose account now maps to a merchant. It never retries successful or ignored events, and provider or graph work does not delay application startup.
+
+Use the protected manual endpoint as an operator fallback:
+
+```bash
+curl -X POST "https://<deployed-host>/internal/razorpay/process-pending?limit=25" \
+  -H "X-API-Key: $API_KEY"
+```
+
+Inspect failures or unresolved account mappings, then retry one corrected event:
+
+```bash
+curl "https://<deployed-host>/internal/razorpay/events?processing_state=failed" \
+  -H "X-API-Key: $API_KEY"
+curl "https://<deployed-host>/internal/razorpay/events?processing_state=unresolved" \
+  -H "X-API-Key: $API_KEY"
+curl -X POST "https://<deployed-host>/internal/razorpay/events/<event-id>/retry" \
+  -H "X-API-Key: $API_KEY"
+```
+
 Deploying ChargeGuard does not create a Razorpay chargeback. Razorpay creates dispute events from its payment/card-network lifecycle and delivers them to the configured callback. The local simulator creates only signed Razorpay-shaped test events with `disp_SIM_...` IDs; it never contacts Razorpay, accepts a dispute, contests a dispute, or creates a real provider record.
+
+Razorpay Test API keys do not expose a public create-dispute endpoint. Deployment only makes ChargeGuard's webhook reachable; the simulator does not create a real Razorpay dispute. JSON persistence remains appropriate only for one-process staging. Multi-worker production requires a shared transactional database and durable queue/outbox.
 
 ## Generated Outputs
 
