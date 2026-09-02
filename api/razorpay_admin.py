@@ -7,6 +7,10 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from api import webhooks as internal_webhooks
 from api.auth import require_api_key
+from api.razorpay_processor import (
+    process_razorpay_provider_event,
+    safe_razorpay_failure_reason,
+)
 from api.razorpay_service import process_normalized_dispute
 from api.schemas import RazorpayReconciliationRequest
 from api.store import store
@@ -24,6 +28,43 @@ router = APIRouter(
     tags=["razorpay-internal"],
     dependencies=[Depends(require_api_key)],
 )
+_MAX_RECOVERY_BATCH_SIZE = 100
+_PUBLIC_EVENT_FIELDS = (
+    "event_id",
+    "provider_event_id",
+    "provider",
+    "event_type",
+    "event_name",
+    "provider_dispute_id",
+    "chargeback_id",
+    "payment_id",
+    "account_id",
+    "merchant_id",
+    "payload_hash",
+    "payload_sha256",
+    "event_id_source",
+    "provider_event_timestamp",
+    "processing_state",
+    "processing_status",
+    "received_at",
+    "last_attempt_at",
+    "attempt_count",
+    "processed_at",
+    "failure_reason",
+    "error",
+)
+
+
+def _safe_event_response(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: event[key]
+        for key in _PUBLIC_EVENT_FIELDS
+        if key in event
+    }
+
+
+def _enqueue_event(background_tasks: BackgroundTasks, event_id: str) -> None:
+    background_tasks.add_task(process_razorpay_provider_event, event_id)
 
 
 def _event_for_status(status: str) -> str:
@@ -72,7 +113,59 @@ def list_razorpay_events(
             for event in events
             if event.get("processing_state") == processing_state
         ]
-    return events
+    return [_safe_event_response(event) for event in events]
+
+
+@router.post("/events/{event_id}/retry")
+def retry_razorpay_event(
+    event_id: str,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    event = store.get_provider_event(event_id)
+    if event is None or event.get("provider") != "razorpay":
+        raise HTTPException(status_code=404, detail="Razorpay event not found.")
+    if not store.requeue_provider_event(event_id, include_received=False):
+        raise HTTPException(
+            status_code=409,
+            detail="Razorpay event is not eligible for retry.",
+        )
+    _enqueue_event(background_tasks, event_id)
+    return {"status": "queued", "event_id": event_id}
+
+
+@router.post("/process-pending")
+def process_pending_razorpay_events(
+    background_tasks: BackgroundTasks,
+    limit: int = Query(default=25, ge=1, le=_MAX_RECOVERY_BATCH_SIZE),
+) -> dict[str, int]:
+    events = store.list_recoverable_provider_events(
+        provider="razorpay",
+        limit=limit,
+    )
+    scheduled = 0
+    skipped = 0
+    failed = 0
+    for event in events:
+        event_id = str(event["event_id"])
+        if not store.requeue_provider_event(event_id):
+            skipped += 1
+            continue
+        try:
+            _enqueue_event(background_tasks, event_id)
+            scheduled += 1
+        except Exception as exc:
+            store.update_provider_event(
+                event_id,
+                processing_state="failed",
+                failure_reason=safe_razorpay_failure_reason(exc),
+            )
+            failed += 1
+    return {
+        "considered": len(events),
+        "scheduled": scheduled,
+        "skipped": skipped,
+        "failed": failed,
+    }
 
 
 @router.post("/reconcile")
@@ -153,7 +246,7 @@ def reconcile_razorpay_disputes(
             store.update_provider_event(
                 event_id,
                 processing_state="failed",
-                failure_reason=str(exc),
+                failure_reason=safe_razorpay_failure_reason(exc),
             )
             results.append({"status": "failed", "provider_dispute_id": dispute_id})
             continue

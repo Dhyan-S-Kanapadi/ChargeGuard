@@ -257,7 +257,20 @@ def process_normalized_dispute(
         raise RuntimeError("Dispute disappeared after provider upsert.")
 
     state = existing["state"]
+    same_created_event = (
+        normalized.provider_event == _CREATE_EVENT
+        and state.get("provider_event_id") == normalized.webhook_event_id
+    )
     metadata_updated = _apply_provider_metadata(state, normalized)
+    if (
+        same_created_event
+        and metadata_updated
+        and not manual_reasons
+        and existing["status"] in {"received", "processing", "failed"}
+        and state.get("decision") is None
+    ):
+        schedule_graph(state)
+        return {"status": "scheduled", "chargeback_id": normalized.chargeback_id}
     if metadata_updated and normalized.provider_event == "payment.dispute.action_required":
         state["provider_action_required"] = True
         state["requires_human_review"] = True

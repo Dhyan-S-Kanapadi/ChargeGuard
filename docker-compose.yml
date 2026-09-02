@@ -2,7 +2,15 @@ services:
   api:
     build: .
     ports:
-      - "8000:8000"
+      - "${PORT:-8000}:${PORT:-8000}"
     env_file:
       - path: .env
         required: false
+    environment:
+      PORT: "${PORT:-8000}"
+      CHARGEGUARD_STORE_PATH: "${CHARGEGUARD_STORE_PATH:-/var/data/chargeguard_store.json}"
+    volumes:
+      - chargeguard-data:/var/data
+
+volumes:
+  chargeguard-data:

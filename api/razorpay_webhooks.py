@@ -6,14 +6,14 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
-from api import webhooks as internal_webhooks
-from api.razorpay_service import normalize_with_enrichment, process_normalized_dispute
+from api.razorpay_processor import process_razorpay_provider_event
 from api.store import store
 from integrations.razorpay_webhook import (
     RazorpayWebhookError,
     parse_envelope,
     parse_event_header,
     payload_sha256,
+    serialize_envelope_for_processing,
     verify_signature,
 )
 
@@ -50,18 +50,34 @@ def _initial_event_record(
     account_id: str,
     payload_hash: str,
     event_id_source: str,
+    event_data: dict[str, Any],
+    provider_dispute_id: str,
+    payment_id: str,
+    provider_event_timestamp: int | None,
 ) -> dict[str, Any]:
     return {
         "event_id": event_id,
         "provider": "razorpay",
         "event_type": event_type,
-        "provider_dispute_id": None,
+        "provider_dispute_id": provider_dispute_id,
+        "chargeback_id": provider_dispute_id,
+        "payment_id": payment_id,
         "account_id": account_id,
         "payload_hash": payload_hash,
         "payload_sha256": payload_hash,
         "event_id_source": event_id_source,
+        "provider_event_timestamp": provider_event_timestamp,
+        "event_data": event_data,
         "processing_state": "received",
     }
+
+
+def enqueue_razorpay_provider_event(
+    background_tasks: BackgroundTasks,
+    event_id: str,
+) -> None:
+    """Schedule deferred work only after the event has been persisted."""
+    background_tasks.add_task(process_razorpay_provider_event, event_id)
 
 
 @router.post("/razorpay")
@@ -95,8 +111,11 @@ async def receive_razorpay_webhook(
     event_id = header_event_id or f"sha256:{digest}"
     try:
         header = parse_event_header(raw_body)
+        envelope = parse_envelope(raw_body)
     except RazorpayWebhookError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    dispute = envelope.payload.dispute.entity
 
     claimed = store.claim_provider_event(
         _initial_event_record(
@@ -105,6 +124,10 @@ async def receive_razorpay_webhook(
             account_id=header.account_id,
             payload_hash=digest,
             event_id_source="header" if header_event_id else "payload_hash",
+            event_data=serialize_envelope_for_processing(envelope),
+            provider_dispute_id=dispute.id,
+            payment_id=dispute.payment_id,
+            provider_event_timestamp=header.created_at,
         )
     )
     if not claimed:
@@ -114,62 +137,14 @@ async def receive_razorpay_webhook(
         store.update_provider_event(event_id, processing_state="ignored")
         return {"status": "ignored", "event_id": event_id}
 
-    try:
-        envelope = parse_envelope(raw_body)
-    except RazorpayWebhookError as exc:
-        store.update_provider_event(
-            event_id,
-            processing_state="failed",
-            failure_reason=str(exc),
-        )
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    dispute = envelope.payload.dispute.entity
-    store.update_provider_event(
-        event_id,
-        provider_dispute_id=dispute.id,
-        chargeback_id=dispute.id,
-        payment_id=dispute.payment_id,
-        provider_event_timestamp=header.created_at,
-        processing_state="processing",
-    )
-
-    merchant = store.get_merchant_by_razorpay_account_id(envelope.account_id)
-    if merchant is None:
-        store.update_provider_event(
-            event_id,
-            processing_state="unresolved",
-            failure_reason="No merchant mapping for Razorpay account ID.",
-        )
-        return {
-            "status": "unresolved",
+    if not store.queue_provider_event(event_id):
+        return {"status": "duplicate", "event_id": event_id}
+    enqueue_razorpay_provider_event(background_tasks, event_id)
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            "status": "queued",
             "event_id": event_id,
             "provider_dispute_id": dispute.id,
-        }
-
-    try:
-        normalized = normalize_with_enrichment(envelope, event_id)
-        result = process_normalized_dispute(
-            normalized,
-            merchant,
-            lambda state: background_tasks.add_task(
-                internal_webhooks.run_chargeback_graph,
-                state,
-            ),
-        )
-    except Exception as exc:
-        store.update_provider_event(
-            event_id,
-            processing_state="failed",
-            failure_reason=str(exc),
-        )
-        raise
-
-    store.update_provider_event(
-        event_id,
-        processing_state=result["status"],
-        merchant_id=merchant["merchant_id"],
+        },
     )
-    if result["status"] == "scheduled":
-        return JSONResponse(status_code=202, content=result)
-    return result

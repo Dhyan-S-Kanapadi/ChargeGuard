@@ -253,6 +253,8 @@ All routes except `/health` and the Razorpay webhook require `X-API-Key`, unless
 | `GET /stats` | `X-API-Key` | Portfolio aggregates |
 | `POST /assistant/query` | `X-API-Key` | Read-only grounded assistant |
 | `GET /internal/razorpay/events` | `X-API-Key` | Inspect provider event processing |
+| `POST /internal/razorpay/events/{event_id}/retry` | `X-API-Key` | Retry one eligible provider event |
+| `POST /internal/razorpay/process-pending` | `X-API-Key` | Enqueue a bounded recovery batch |
 | `POST /internal/razorpay/reconcile` | `X-API-Key` | Reconcile Razorpay disputes through REST |
 | `/dev/razorpay-simulator/*` | `X-API-Key` | Development-only signed event simulator |
 | `/dashboard` | Static route | Local dashboard assets; API calls remain protected |
@@ -271,12 +273,14 @@ Dispute responses remove nested evidence `raw` objects and transaction email, IP
 2. Enforce `RAZORPAY_WEBHOOK_MAX_BODY_BYTES`.
 3. Read the exact raw request bytes.
 4. Verify `X-Razorpay-Signature` using HMAC-SHA256 and `RAZORPAY_WEBHOOK_SECRET`.
-5. Parse the event only after signature verification.
+5. Parse and structurally validate the event only after signature verification.
 6. Use `x-razorpay-event-id` as the idempotency key; use a deterministic SHA-256 fallback if absent.
-7. Atomically claim and persist the canonical provider event before scheduling work.
-8. Resolve `account_id` to a merchant's `razorpay_account_id`.
-9. Enrich missing payment/card data through Razorpay REST when required.
-10. Normalize and upsert the dispute through `api/razorpay_service.py`.
+7. Persist only the allowlisted, PII-minimized fields needed for deferred processing.
+8. Atomically claim and move the event to `queued` before scheduling work.
+9. Add the event ID to FastAPI `BackgroundTasks`.
+10. Return `202 Accepted` without merchant resolution, REST calls, LangGraph execution, or PDF work.
+
+The background processor atomically moves `queued` to `processing`, resolves the merchant, enriches missing payment/card data, normalizes and upserts the dispute, schedules the graph only when eligible, and records a terminal provider-event state. `received`, `queued`, and `processing` never have `processed_at`; terminal states do. Failed, unresolved, queued, and stale-processing events are recoverable through the protected internal endpoints.
 
 Do not parse and reserialize the body before signature verification. Do not add `X-API-Key` authentication to this endpoint.
 
@@ -420,37 +424,31 @@ Perform these steps in order:
 ## Docker Setup
 
 1. Ensure `.env` exists.
-2. Build and start:
+2. Build and start. The image build runs `python -m ml.train` after copying the application, so a missing or invalid baseline model fails the build:
 
    ```powershell
    docker compose up --build -d
    ```
 
-3. Because `ml/artifacts` is intentionally excluded from the image, train inside a new container or mount an artifact:
-
-   ```powershell
-   docker compose exec api python -m ml.train
-   ```
-
-4. Verify health:
+3. Verify health on `PORT` (default 8000):
 
    ```powershell
    curl.exe http://127.0.0.1:8000/health
    ```
 
-5. Inspect startup errors:
+4. Inspect startup errors:
 
    ```powershell
    docker compose logs api
    ```
 
-6. Stop without deleting source data:
+5. Stop without deleting source data:
 
    ```powershell
    docker compose down
    ```
 
-There is no Neo4j service in Compose. Do not reintroduce one unless a concrete persisted graph feature is implemented and tested.
+Compose mounts `chargeguard-data` at `/var/data` and defaults `CHARGEGUARD_STORE_PATH` to `/var/data/chargeguard_store.json`. Run only one application process with this JSON store. There is no Neo4j service in Compose; do not reintroduce one unless a concrete persisted graph feature is implemented and tested.
 
 ## Internal Artificial Chargeback Test
 

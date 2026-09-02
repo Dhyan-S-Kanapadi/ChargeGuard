@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+import logging
 import os
 from pathlib import Path
 
@@ -15,7 +17,31 @@ from api.webhooks import router as webhooks_router
 from ml.model import WinProbabilityModel
 
 
-app = FastAPI(title="ChargeGuard AI", version="0.1.0")
+logger = logging.getLogger(__name__)
+
+
+def _log_deployment_warnings() -> None:
+    if os.getenv("ENVIRONMENT", "development").strip().lower() != "production":
+        return
+    if not os.getenv("CHARGEGUARD_STORE_PATH", "").strip():
+        logger.warning(
+            "CHARGEGUARD_STORE_PATH is not configured in production; provider events "
+            "and disputes will not survive a restart."
+        )
+    logger.warning(
+        "The synchronized JSON store supports one application process only. "
+        "Multi-worker production requires a shared transactional database and "
+        "durable queue/outbox with atomic event claim and job creation."
+    )
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    _log_deployment_warnings()
+    yield
+
+
+app = FastAPI(title="ChargeGuard AI", version="0.1.0", lifespan=_lifespan)
 app.include_router(webhooks_router)
 app.include_router(disputes_router)
 app.include_router(merchants_router)
