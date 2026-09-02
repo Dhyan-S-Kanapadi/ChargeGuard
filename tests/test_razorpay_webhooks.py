@@ -184,8 +184,8 @@ def test_unknown_merchant_is_persisted_and_acknowledged() -> None:
 
     response = _post(raw)
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "unresolved"
+    assert response.status_code == 202
+    assert response.json()["status"] == "queued"
     assert store.get_dispute("disp_1") is None
     event = store.get_provider_event("evt_1")
     assert event["processing_state"] == "unresolved"
@@ -207,8 +207,9 @@ def test_production_reason_is_not_silently_mapped_to_network_code() -> None:
 
     response = _post(_raw_event())
 
-    assert response.status_code == 200
-    assert response.json()["status"] == "manual_review"
+    assert response.status_code == 202
+    assert response.json()["status"] == "queued"
+    assert store.get_provider_event("evt_1")["processing_state"] == "manual_review"
     state = store.get_dispute("disp_1")["state"]
     assert state["provider_reason_code"] == "unauthorised_transaction"
     assert state["reason_code"] == ""
@@ -221,7 +222,7 @@ def test_upi_dispute_never_becomes_rupay() -> None:
 
     response = _post(_raw_event(method="upi", network=None))
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     state = store.get_dispute("disp_1")["state"]
     assert state["payment_rail"] == "UPI"
     assert state["card_network"] is None
@@ -249,7 +250,7 @@ def test_card_network_is_enriched_from_expanded_payment(monkeypatch) -> None:
 
     response = _post(_raw_event(include_payment=False))
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     assert calls == [("pay_1", True)]
     state = store.get_dispute("disp_1")["state"]
     assert state["card_network"] == "MASTERCARD"
@@ -270,7 +271,7 @@ def test_enrichment_failure_does_not_drop_event(monkeypatch) -> None:
 
     response = _post(_raw_event(include_payment=False))
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     assert store.get_dispute("disp_1") is not None
     state = store.get_dispute("disp_1")["state"]
     assert "razorpay_payment_enrichment_failed" in state["degraded_reasons"]
@@ -282,7 +283,7 @@ def test_overdue_respond_by_is_ingested_for_manual_review() -> None:
 
     response = _post(_raw_event(respond_by=overdue))
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     state = store.get_dispute("disp_1")["state"]
     assert state["deadline_overdue"] is True
     assert "respond_by_overdue" in state["degraded_reasons"]
@@ -314,7 +315,7 @@ def test_lifecycle_updates_case_and_only_filed_terminal_outcome_learns(monkeypat
         dispute_id="disp_SIM_1",
         event_created_at=created_at + timedelta(minutes=1),
     )
-    assert _post(action, "evt_action").status_code == 200
+    assert _post(action, "evt_action").status_code == 202
     assert store.get_dispute("disp_SIM_1")["state"]["provider_action_required"] is True
 
     won = _raw_event(
@@ -323,7 +324,10 @@ def test_lifecycle_updates_case_and_only_filed_terminal_outcome_learns(monkeypat
         event_created_at=created_at + timedelta(minutes=2),
     )
     response = _post(won, "evt_won_unfiled")
-    assert response.json()["status"] == "outcome_not_eligible"
+    assert response.status_code == 202
+    assert store.get_provider_event("evt_won_unfiled")["processing_state"] == (
+        "outcome_not_eligible"
+    )
     assert store.get_dispute("disp_SIM_1")["state"]["final_outcome"] is None
 
     record = store.get_dispute("disp_SIM_1")
@@ -338,18 +342,18 @@ def test_lifecycle_updates_case_and_only_filed_terminal_outcome_learns(monkeypat
         dispute_id="disp_SIM_1",
         event_created_at=created_at + timedelta(minutes=3),
     )
-    assert _post(lost, "evt_lost_filed").status_code == 200
+    assert _post(lost, "evt_lost_filed").status_code == 202
     assert store.get_dispute("disp_SIM_1")["state"]["final_outcome"] == "LOSS"
 
 
 def test_closed_updates_status_without_inventing_outcome() -> None:
     assert store.create_merchant(_merchant())
-    assert _post(_raw_event()).status_code == 200
+    assert _post(_raw_event()).status_code == 202
     closed = _raw_event(event="payment.dispute.closed")
 
     response = _post(closed, "evt_closed")
 
-    assert response.status_code == 200
+    assert response.status_code == 202
     state = store.get_dispute("disp_1")["state"]
     assert state["provider_status"] == "closed"
     assert state["final_outcome"] == "PENDING"
@@ -357,7 +361,7 @@ def test_closed_updates_status_without_inventing_outcome() -> None:
 
 def test_conflicting_terminal_event_does_not_regress_recorded_outcome() -> None:
     assert store.create_merchant(_merchant())
-    assert _post(_raw_event()).status_code == 200
+    assert _post(_raw_event()).status_code == 202
     record = store.get_dispute("disp_1")
     state = record["state"]
     state["decision"] = "FIGHT"
@@ -367,7 +371,7 @@ def test_conflicting_terminal_event_does_not_regress_recorded_outcome() -> None:
     state["final_outcome"] = None
     store.update_dispute("disp_1", status="completed", state=state)
     won = _raw_event(event="payment.dispute.won")
-    assert _post(won, "evt_won").status_code == 200
+    assert _post(won, "evt_won").status_code == 202
     lost = _raw_event(
         event="payment.dispute.lost",
         event_created_at=datetime.now(timezone.utc) + timedelta(minutes=1),
@@ -375,7 +379,8 @@ def test_conflicting_terminal_event_does_not_regress_recorded_outcome() -> None:
 
     response = _post(lost, "evt_conflicting_lost")
 
-    assert response.json()["status"] == "stale"
+    assert response.status_code == 202
+    assert store.get_provider_event("evt_conflicting_lost")["processing_state"] == "stale"
     state = store.get_dispute("disp_1")["state"]
     assert state["final_outcome"] == "WIN"
     assert state["provider_event"] == "payment.dispute.won"
@@ -390,10 +395,10 @@ def test_out_of_order_created_does_not_regress_under_review(monkeypatch) -> None
         event="payment.dispute.under_review",
         event_created_at=now,
     )
-    assert _post(under_review, "evt_review").status_code == 200
+    assert _post(under_review, "evt_review").status_code == 202
     older_created = _raw_event(event_created_at=now - timedelta(hours=1))
 
-    assert _post(older_created, "evt_created_late").status_code == 200
+    assert _post(older_created, "evt_created_late").status_code == 202
     state = store.get_dispute("disp_1")["state"]
     assert state["provider_event"] == "payment.dispute.under_review"
     assert calls == []
@@ -453,4 +458,7 @@ def test_failed_provider_event_can_be_reclaimed_for_retry() -> None:
     reclaimed = store.get_provider_event("evt_retry")
     assert reclaimed["processing_state"] == "received"
     assert reclaimed["failure_reason"] is None
-    assert reclaimed["attempt_count"] == 2
+    assert reclaimed["attempt_count"] == 0
+    assert store.queue_provider_event("evt_retry") is True
+    assert store.start_provider_event_processing("evt_retry") is True
+    assert store.get_provider_event("evt_retry")["attempt_count"] == 1

@@ -419,7 +419,7 @@ https://<your-public-host>/webhook/razorpay
 
 Enable all six events: `payment.dispute.created`, `payment.dispute.action_required`, `payment.dispute.under_review`, `payment.dispute.won`, `payment.dispute.lost`, and `payment.dispute.closed`. Set the same webhook secret in the Dashboard and `RAZORPAY_WEBHOOK_SECRET`. The webhook secret is different from `RAZORPAY_KEY_SECRET`, which authenticates outgoing REST requests. Test/live behavior is selected by the Razorpay key pair (`rzp_test_...` versus live keys); use Test mode for staging.
 
-The endpoint has no `X-API-Key` dependency because Razorpay authenticates with `X-Razorpay-Signature`. ChargeGuard verifies HMAC-SHA256 over the exact raw body before parsing, limits body size, uses `x-razorpay-event-id` for idempotency, and falls back to a deterministic payload hash when that header is absent. It stores payload hashes rather than full webhook bodies. Unknown merchant accounts are acknowledged and recorded as `unresolved` for protected inspection at `GET /internal/razorpay/events?processing_state=unresolved`.
+The endpoint has no `X-API-Key` dependency because Razorpay authenticates with `X-Razorpay-Signature`. ChargeGuard verifies HMAC-SHA256 over the exact raw body before parsing, limits body size, uses `x-razorpay-event-id` for idempotency, and falls back to a deterministic payload hash when that header is absent. It stores the payload hash plus an allowlisted, PII-minimized event projection rather than the full webhook body. Unknown merchant accounts are acknowledged and recorded as `unresolved` by deferred processing for protected inspection at `GET /internal/razorpay/events?processing_state=unresolved`.
 
 Map a Razorpay account to a merchant before enabling delivery:
 
@@ -462,9 +462,106 @@ py scripts/simulate_razorpay_dispute.py out-of-order
 
 Lifecycle scenarios are `action-required`, `under-review`, `won`, `lost`, and `closed`. The simulator signs the exact JSON sent to the real `/webhook/razorpay` endpoint. Both the script and development router reject production mode, and simulator delivery is restricted to a loopback `/webhook/razorpay` URL. It never contacts Razorpay or creates a real dispute; `disp_SIM_...` IDs exist only in ChargeGuard.
 
-Run Razorpay-focused tests with `py -m pytest -q tests/test_razorpay_webhooks.py tests/test_razorpay_integration.py tests/test_razorpay_reconciliation.py tests/test_razorpay_simulator.py`.
+Run Razorpay-focused tests with `py -m pytest -q tests/test_razorpay_webhooks.py tests/test_razorpay_event_recovery.py tests/test_razorpay_integration.py tests/test_razorpay_reconciliation.py tests/test_razorpay_simulator.py`.
 
 The current synchronized store is adequate for one-process staging when `CHARGEGUARD_STORE_PATH` is configured. Production multi-worker deployment must replace it with a shared transactional database plus a queue/outbox so event claims and workflow scheduling remain atomic across processes.
+
+## Staging Deployment
+
+ChargeGuard supports a recoverable, single-instance Razorpay Test Mode staging deployment. The webhook verifies and validates the exact signed body, persists a PII-minimized event, queues its ID, and returns `202` before Razorpay enrichment or LangGraph execution begins.
+
+1. Configure these required staging values in the deployment secret manager or `.env`:
+
+   ```env
+   PORT=8000
+   ENVIRONMENT=production
+   API_KEY=<strong-internal-api-key>
+   RAZORPAY_KEY_ID=<rzp_test_key_id>
+   RAZORPAY_KEY_SECRET=<test-mode-api-secret>
+   RAZORPAY_WEBHOOK_SECRET=<separate-webhook-secret>
+   RAZORPAY_WEBHOOK_ENABLED=true
+   RAZORPAY_SIMULATOR_ENABLED=false
+   CHARGEGUARD_STORE_PATH=/var/data/chargeguard_store.json
+   CHARGEGUARD_USE_STUBS=true
+   RAZORPAY_USE_STUBS=false
+   MODEL_PATH=./ml/artifacts/win_probability_model.pkl
+   ```
+
+   `RAZORPAY_KEY_SECRET` authenticates outbound REST calls. `RAZORPAY_WEBHOOK_SECRET` validates inbound webhook signatures; keep them separate and never commit either one.
+
+2. Build the image. The deterministic baseline model is trained during the build, and a training failure fails the build:
+
+   ```bash
+   docker build -t chargeguard-staging .
+   ```
+
+3. Run exactly one application process with a persistent disk mounted at `/var/data`:
+
+   ```bash
+   docker volume create chargeguard-data
+   docker run --rm --name chargeguard-staging \
+     --env-file .env \
+     -p 8000:8000 \
+     -v chargeguard-data:/var/data \
+     chargeguard-staging
+   ```
+
+   The JSON store is not safe for multiple application processes. Multi-worker production requires a shared transactional database, durable queue/outbox, and atomic event claim plus job creation.
+
+4. Confirm the selected port is healthy:
+
+   ```bash
+   curl http://127.0.0.1:8000/health
+   ```
+
+   The response must include `"status":"ok"` and `"model_loaded":true`.
+
+5. Map the Razorpay account before enabling delivery. Use the exact `account_id` emitted by Razorpay:
+
+   ```bash
+   curl -X POST https://<deployed-host>/merchants \
+     -H "X-API-Key: $API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"merchant_id":"merchant_001","name":"Example Merchant","vertical":"ecommerce","payment_provider":"razorpay","razorpay_account_id":"acc_...","freshdesk_domain":"","average_order_value":2500,"chargeback_history_count":0}'
+   ```
+
+6. Configure the Razorpay Test Mode Dashboard callback:
+
+   ```text
+   https://<deployed-host>/webhook/razorpay
+   ```
+
+   Enable `payment.dispute.created`, `payment.dispute.action_required`, `payment.dispute.under_review`, `payment.dispute.won`, `payment.dispute.lost`, and `payment.dispute.closed`. Enter the same separate webhook secret configured as `RAZORPAY_WEBHOOK_SECRET`.
+
+7. Inspect safe event metadata, including unresolved account mappings:
+
+   ```bash
+   curl "https://<deployed-host>/internal/razorpay/events?processing_state=unresolved" \
+     -H "X-API-Key: $API_KEY"
+   ```
+
+   Stored processing payloads are not returned by this endpoint.
+
+8. After correcting a merchant mapping or temporary failure, retry one eligible event or process a bounded batch:
+
+   ```bash
+   curl -X POST "https://<deployed-host>/internal/razorpay/events/<event-id>/retry" \
+     -H "X-API-Key: $API_KEY"
+
+   curl -X POST "https://<deployed-host>/internal/razorpay/process-pending?limit=25" \
+     -H "X-API-Key: $API_KEY"
+   ```
+
+9. Reconcile missed or drifted disputes through the same normalization/upsert path:
+
+   ```bash
+   curl -X POST "https://<deployed-host>/internal/razorpay/reconcile" \
+     -H "X-API-Key: $API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"merchant_id":"merchant_001","count":100}'
+   ```
+
+Deploying ChargeGuard does not create a Razorpay chargeback. Razorpay creates dispute events from its payment/card-network lifecycle and delivers them to the configured callback. The local simulator creates only signed Razorpay-shaped test events with `disp_SIM_...` IDs; it never contacts Razorpay, accepts a dispute, contests a dispute, or creates a real provider record.
 
 ## Generated Outputs
 

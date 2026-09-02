@@ -21,6 +21,13 @@ class RazorpayWebhookError(ValueError):
     """Raised when a signed Razorpay event is structurally unusable."""
 
 
+_SAFE_SIMULATOR_NOTE_KEYS = {
+    "chargeguard_simulator",
+    "chargeguard_card_network",
+    "chargeguard_network_reason_code",
+}
+
+
 def verify_signature(
     raw_body: bytes,
     signature: str | None,
@@ -53,6 +60,70 @@ def parse_event_header(raw_body: bytes) -> RazorpayEventHeader:
         return RazorpayEventHeader.model_validate_json(raw_body)
     except ValidationError as exc:
         raise RazorpayWebhookError("Webhook body was not a valid Razorpay event.") from exc
+
+
+def serialize_envelope_for_processing(
+    envelope: RazorpayWebhookEnvelope,
+) -> dict[str, Any]:
+    """Return the minimum PII-free event data needed for deferred processing."""
+    payment = envelope.payload.payment.entity if envelope.payload.payment else None
+    safe_payment = None
+    if payment is not None:
+        safe_notes = {
+            key: payment.notes[key]
+            for key in _SAFE_SIMULATOR_NOTE_KEYS
+            if key in payment.notes
+        }
+        safe_payment = {
+            "entity": {
+                "id": payment.id,
+                "amount": payment.amount,
+                "currency": payment.currency,
+                "order_id": payment.order_id,
+                "method": payment.method,
+                "card": (
+                    {"network": payment.card.network}
+                    if payment.card is not None
+                    else None
+                ),
+                "notes": safe_notes,
+                "created_at": payment.created_at,
+            }
+        }
+
+    dispute = envelope.payload.dispute.entity
+    return {
+        "entity": "event",
+        "account_id": envelope.account_id,
+        "event": envelope.event,
+        "payload": {
+            "payment": safe_payment,
+            "dispute": {
+                "entity": {
+                    "id": dispute.id,
+                    "payment_id": dispute.payment_id,
+                    "amount": dispute.amount,
+                    "currency": dispute.currency,
+                    "reason_code": dispute.reason_code,
+                    "respond_by": dispute.respond_by,
+                    "status": dispute.status,
+                    "phase": dispute.phase,
+                    "created_at": dispute.created_at,
+                }
+            },
+        },
+        "created_at": envelope.created_at,
+    }
+
+
+def parse_stored_envelope(data: Any) -> RazorpayWebhookEnvelope:
+    """Validate the sanitized event representation loaded from durable storage."""
+    try:
+        return RazorpayWebhookEnvelope.model_validate(data)
+    except ValidationError as exc:
+        raise RazorpayWebhookError(
+            "Stored Razorpay event data was invalid."
+        ) from exc
 
 
 def utc_timestamp(value: Any) -> datetime | None:

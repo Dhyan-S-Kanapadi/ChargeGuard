@@ -9,6 +9,27 @@ from typing import Any
 from core.state import ChargebackState, MerchantProfile
 
 
+PROVIDER_EVENT_STATES = frozenset(
+    {
+        "received",
+        "queued",
+        "processing",
+        "scheduled",
+        "manual_review",
+        "updated",
+        "ignored",
+        "unresolved",
+        "failed",
+        "stale",
+        "outcome_not_eligible",
+    }
+)
+NON_TERMINAL_PROVIDER_EVENT_STATES = frozenset(
+    {"received", "queued", "processing"}
+)
+TERMINAL_PROVIDER_EVENT_STATES = PROVIDER_EVENT_STATES - NON_TERMINAL_PROVIDER_EVENT_STATES
+
+
 def _provider_event_claim_timeout_seconds() -> int:
     try:
         return max(1, int(os.getenv("PROVIDER_EVENT_CLAIM_TIMEOUT_SECONDS", "300")))
@@ -16,8 +37,26 @@ def _provider_event_claim_timeout_seconds() -> int:
         return 300
 
 
+def _provider_event_is_stale(
+    event: dict[str, Any],
+    now: datetime | None = None,
+) -> bool:
+    if (event.get("processing_state") or event.get("processing_status")) != "processing":
+        return False
+    reference = event.get("last_attempt_at") or event.get("received_at")
+    if not isinstance(reference, datetime):
+        return True
+    current_time = now or datetime.now(timezone.utc)
+    return reference <= current_time - timedelta(
+        seconds=_provider_event_claim_timeout_seconds()
+    )
+
+
 class InMemoryStore:
     """Thread-safe repository with optional JSON persistence for local durability."""
+
+    # TODO: Multi-worker production requires a shared transactional database and
+    # durable queue/outbox with atomic provider-event claim and job creation.
 
     def __init__(self, path: str | Path | None = None) -> None:
         self._lock = RLock()
@@ -128,23 +167,22 @@ class InMemoryStore:
                 processing_state = existing.get("processing_state") or existing.get(
                     "processing_status"
                 )
-                last_attempt = existing.get("last_attempt_at") or existing.get("received_at")
-                stale_processing = (
-                    processing_state in {"received", "processing"}
-                    and isinstance(last_attempt, datetime)
-                    and last_attempt
-                    <= now
-                    - timedelta(seconds=_provider_event_claim_timeout_seconds())
-                )
+                stale_processing = _provider_event_is_stale(existing, now)
                 if processing_state != "failed" and not stale_processing:
                     return False
+                attempt_count = int(existing.get("attempt_count") or 0)
+                received_at = existing.get("received_at") or now
+                existing.update(deepcopy(event))
+                existing["event_id"] = event_id
+                existing["provider_event_id"] = event_id
                 existing["processing_state"] = "received"
                 existing["processing_status"] = "received"
                 existing["failure_reason"] = None
                 existing["error"] = None
                 existing["processed_at"] = None
-                existing["last_attempt_at"] = now
-                existing["attempt_count"] = int(existing.get("attempt_count") or 1) + 1
+                existing["last_attempt_at"] = existing.get("last_attempt_at")
+                existing["attempt_count"] = attempt_count
+                existing["received_at"] = received_at
                 self._save()
                 return True
             record = deepcopy(event)
@@ -157,20 +195,102 @@ class InMemoryStore:
             record["provider_dispute_id"] = dispute_id
             record["chargeback_id"] = dispute_id
             record.setdefault("received_at", now)
-            record.setdefault("last_attempt_at", now)
-            record.setdefault("attempt_count", 1)
-            record.setdefault("processed_at", None)
             failure_reason = record.get("failure_reason") or record.get("error")
             record["failure_reason"] = failure_reason
             record["error"] = failure_reason
             processing_state = record.get("processing_state") or record.get(
                 "processing_status", "received"
             )
+            if processing_state not in PROVIDER_EVENT_STATES:
+                raise ValueError(f"Invalid provider event state: {processing_state}")
             record["processing_state"] = processing_state
             record["processing_status"] = processing_state
+            record.setdefault("attempt_count", 1 if processing_state == "processing" else 0)
+            record.setdefault(
+                "last_attempt_at",
+                now if processing_state == "processing" else None,
+            )
+            record["processed_at"] = None
+            if processing_state in TERMINAL_PROVIDER_EVENT_STATES:
+                record["processed_at"] = record.get("processed_at") or now
             self._provider_events[event_id] = record
             self._save()
             return True
+
+    def queue_provider_event(self, event_id: str) -> bool:
+        """Move a newly received event to the recoverable queue."""
+        with self._lock:
+            event = self._provider_events.get(event_id)
+            if event is None or event.get("processing_state") != "received":
+                return False
+            self._set_provider_event_state(event, "queued")
+            self._save()
+            return True
+
+    def start_provider_event_processing(self, event_id: str) -> bool:
+        """Atomically acquire a queued event for one processing attempt."""
+        with self._lock:
+            event = self._provider_events.get(event_id)
+            if event is None:
+                return False
+            if event.get("processing_state") != "queued":
+                return False
+            now = datetime.now(timezone.utc)
+            self._set_provider_event_state(event, "processing")
+            event["attempt_count"] = int(event.get("attempt_count") or 0) + 1
+            event["last_attempt_at"] = now
+            self._save()
+            return True
+
+    def requeue_provider_event(
+        self,
+        event_id: str,
+        *,
+        include_received: bool = True,
+    ) -> bool:
+        """Make an eligible failed, unresolved, queued, or abandoned event runnable."""
+        with self._lock:
+            event = self._provider_events.get(event_id)
+            if event is None:
+                return False
+            processing_state = event.get("processing_state") or event.get(
+                "processing_status"
+            )
+            eligible_states = {"queued", "failed", "unresolved"}
+            if include_received:
+                eligible_states.add("received")
+            eligible = processing_state in eligible_states
+            if processing_state == "processing":
+                eligible = _provider_event_is_stale(event)
+            if not eligible:
+                return False
+            self._set_provider_event_state(event, "queued")
+            self._save()
+            return True
+
+    def list_recoverable_provider_events(
+        self,
+        *,
+        provider: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Return a bounded snapshot of events safe to enqueue for recovery."""
+        bounded_limit = max(0, limit)
+        with self._lock:
+            recoverable = []
+            for event in self._provider_events.values():
+                state = event.get("processing_state") or event.get("processing_status")
+                if event.get("provider") != provider:
+                    continue
+                if state in {"received", "queued", "failed", "unresolved"} or (
+                    state == "processing" and _provider_event_is_stale(event)
+                ):
+                    recoverable.append(deepcopy(event))
+            recoverable.sort(
+                key=lambda item: item.get("received_at")
+                or datetime.min.replace(tzinfo=timezone.utc)
+            )
+            return recoverable[:bounded_limit]
 
     def update_provider_event(self, event_id: str, **updates: Any) -> None:
         with self._lock:
@@ -183,11 +303,25 @@ class InMemoryStore:
                 updates["failure_reason"] = updates["error"]
             if "failure_reason" in updates and "error" not in updates:
                 updates["error"] = updates["failure_reason"]
-            event.update(deepcopy(updates))
             processing_state = updates.get("processing_state")
-            if processing_state and processing_state not in {"received", "processing"}:
-                event["processed_at"] = datetime.now(timezone.utc)
+            if processing_state and processing_state not in PROVIDER_EVENT_STATES:
+                raise ValueError(f"Invalid provider event state: {processing_state}")
+            event.update(deepcopy(updates))
+            if processing_state:
+                self._set_provider_event_state(event, processing_state)
             self._save()
+
+    @staticmethod
+    def _set_provider_event_state(event: dict[str, Any], processing_state: str) -> None:
+        event["processing_state"] = processing_state
+        event["processing_status"] = processing_state
+        if processing_state in NON_TERMINAL_PROVIDER_EVENT_STATES:
+            event["processed_at"] = None
+        else:
+            event["processed_at"] = datetime.now(timezone.utc)
+        if processing_state in {"received", "queued", "processing"}:
+            event["failure_reason"] = None
+            event["error"] = None
 
     def get_provider_event(self, event_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -254,6 +388,22 @@ class InMemoryStore:
         if not isinstance(provider_events, dict) or not isinstance(simulator_disputes, dict):
             raise ValueError("Store provider event maps must be objects.")
         self._provider_events = deepcopy(provider_events)
+        for event_id, event in self._provider_events.items():
+            event.setdefault("event_id", event_id)
+            event.setdefault("provider_event_id", event_id)
+            processing_state = event.get("processing_state") or event.get(
+                "processing_status", "received"
+            )
+            event["processing_state"] = processing_state
+            event["processing_status"] = processing_state
+            event.setdefault("attempt_count", 0)
+            event.setdefault("last_attempt_at", event.get("received_at"))
+            if processing_state in NON_TERMINAL_PROVIDER_EVENT_STATES:
+                event["processed_at"] = None
+            elif event.get("processed_at") is None:
+                event["processed_at"] = event.get("received_at") or datetime.now(
+                    timezone.utc
+                )
         self._simulator_disputes = deepcopy(simulator_disputes)
 
     def _save(self) -> None:
