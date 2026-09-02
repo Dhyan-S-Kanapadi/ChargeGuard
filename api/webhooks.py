@@ -59,15 +59,29 @@ def reset_webhook_rate_limiter() -> None:
         _RATE_LIMIT_BUCKETS.clear()
 
 
-def run_chargeback_graph(state: ChargebackState) -> None:
+def run_chargeback_graph(state: ChargebackState) -> bool:
     chargeback_id = state["chargeback_id"]
     store.update_dispute(chargeback_id, status="processing")
     try:
         result = chargeback_graph.invoke(state)
         store.update_dispute(chargeback_id, status="completed", state=result)
+        return True
     except Exception as exc:
-        logger.exception("Chargeback graph failed for %s", chargeback_id)
-        store.update_dispute(chargeback_id, status="failed", state=state, error=str(exc))
+        failure_reason = f"Chargeback graph execution failed ({type(exc).__name__})."
+        logger.error(
+            "Chargeback graph failed",
+            extra={
+                "chargeback_id": chargeback_id,
+                "failure_type": type(exc).__name__,
+            },
+        )
+        store.update_dispute(
+            chargeback_id,
+            status="failed",
+            state=state,
+            error=failure_reason,
+        )
+        return False
 
 
 def _initial_state(

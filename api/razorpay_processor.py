@@ -15,9 +15,19 @@ from integrations.razorpay_webhook import parse_stored_envelope
 logger = logging.getLogger(__name__)
 
 
+class ChargebackGraphExecutionError(RuntimeError):
+    """Raised when the persisted dispute workflow reports a failed execution."""
+
+
 def safe_razorpay_failure_reason(exc: Exception) -> str:
     """Return an operator-safe category without provider payloads or credentials."""
     return f"Razorpay provider event processing failed ({type(exc).__name__})."
+
+
+def run_provider_chargeback_graph(state: ChargebackState) -> None:
+    """Run the graph while allowing the provider event to observe failures."""
+    if internal_webhooks.run_chargeback_graph(state) is False:
+        raise ChargebackGraphExecutionError("Chargeback graph execution failed.")
 
 
 def process_razorpay_provider_event(
@@ -60,7 +70,7 @@ def process_razorpay_provider_event(
         result = process_normalized_dispute(
             normalized,
             merchant,
-            schedule_graph or internal_webhooks.run_chargeback_graph,
+            schedule_graph or run_provider_chargeback_graph,
         )
         store.update_provider_event(
             event_id,
