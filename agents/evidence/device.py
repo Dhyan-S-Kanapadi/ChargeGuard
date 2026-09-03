@@ -20,7 +20,7 @@ def _env_flag(name: str, default: bool = False) -> bool:
 def _transaction_context(state: ChargebackState) -> dict[str, Any]:
     transaction = state.get("transaction") or {}
     return {
-        "device_id": transaction.get("device_id") or f"device_{state['chargeback_id']}",
+        "device_id": transaction.get("device_id") or "",
         "ip_address": transaction.get("ip_address", ""),
         "customer_email": transaction.get("customer_email", ""),
     }
@@ -175,18 +175,18 @@ def device_agent(state: ChargebackState) -> ChargebackState:
     try:
         risk, source = _collect_device_data(state)
         state["device"] = _build_device_evidence(risk, state=state, source=source)
-    except SeonConfigError as exc:
-        logger.warning("SEON credentials are unavailable: %s", exc)
+    except SeonConfigError:
+        logger.warning("SEON credentials are unavailable")
         state["device"] = None
         state["evidence_collection_degraded"] = True
         degraded_reasons = state.setdefault("degraded_reasons", [])
         if "seon_credentials_missing" not in degraded_reasons:
             degraded_reasons.append("seon_credentials_missing")
-    except Exception as exc:
-        logger.exception("Device evidence collection failed: %s", exc)
+    except Exception:
+        logger.error("Device evidence collection failed")
         state["device"] = None
         state["evidence_collection_degraded"] = True
         degraded_reasons = state.setdefault("degraded_reasons", [])
-        if "device" not in degraded_reasons:
-            degraded_reasons.append("device")
+        if "device_provider_unavailable" not in degraded_reasons:
+            degraded_reasons.append("device_provider_unavailable")
     return state

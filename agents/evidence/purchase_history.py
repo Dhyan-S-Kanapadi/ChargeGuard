@@ -37,7 +37,7 @@ def _matched_elements(disputed: OrderRecord, candidate: OrderRecord) -> list[str
 
 def check_ce3_qualification(state: ChargebackState) -> CE3Qualification:
     merchant_id = state["merchant_profile"]["merchant_id"]
-    order_id = state.get("order_id")
+    order_id = state.get("commerce_order_id") or state.get("order_id")
     disputed = store.get_order(merchant_id, order_id) if order_id else None
     if disputed is None or not disputed["customer_email"]:
         return {

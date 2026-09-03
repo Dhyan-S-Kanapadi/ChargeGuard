@@ -141,7 +141,8 @@ def test_comms_agent_records_empty_evidence_on_collection_failure(monkeypatch) -
     assert result["comms"]["emails"] == []
     assert result["comms"]["post_delivery_interaction"] is False
     assert result["comms"]["raw"]["source"] == "comms_agent_empty"
-    assert result["comms"]["raw"]["error"] == "gmail unavailable"
+    assert result["comms"]["raw"]["error"] == "comms_processing_failed"
+    assert "comms_processing_failed" in result["degraded_reasons"]
 
 
 def test_comms_agent_keeps_freshdesk_when_gmail_fails(monkeypatch) -> None:
@@ -170,12 +171,17 @@ def test_comms_agent_keeps_freshdesk_when_gmail_fails(monkeypatch) -> None:
     assert result["comms"] is not None
     assert len(result["comms"]["support_tickets"]) == 1
     assert result["comms"]["raw"]["source_errors"] == {
-        "gmail": "gmail unavailable"
+        "gmail_provider_unavailable": "gmail_provider_unavailable"
     }
+    assert "gmail_provider_unavailable" in result["degraded_reasons"]
 
 
 def test_comms_collection_uses_merchant_support_connector(monkeypatch) -> None:
     state = _state()
+    state["provider"] = "razorpay"
+    state["provider_order_id"] = "order_rzp_do_not_search"
+    state["commerce_order_id"] = "shopify_1001"
+    state["commerce_order_number"] = "#1001"
     state["merchant_profile"]["support_connector_ref"] = "ACME"
     state["merchant_profile"]["gmail_user_id"] = "support@acme.example"
     calls: dict[str, dict] = {}
@@ -198,13 +204,17 @@ def test_comms_collection_uses_merchant_support_connector(monkeypatch) -> None:
 
         def search_tickets(self, *, email):
             calls["freshdesk_query"] = {"email": email}
-            return []
+            return [
+                {"id": 1, "subject": "Question about #1001"},
+                {"id": 2, "subject": "Question about shopify_1001"},
+                {"id": 3, "subject": "Question about order_rzp_do_not_search"},
+            ]
 
     monkeypatch.setattr(comms, "GmailReader", FakeGmailReader)
     monkeypatch.setattr(comms, "FreshdeskClient", FakeFreshdeskClient)
 
     assert comms._collect_gmail(state) == []
-    assert comms._collect_freshdesk(state) == []
+    assert [ticket["id"] for ticket in comms._collect_freshdesk(state)] == [1, 2]
     assert calls["gmail"] == {
         "connector_ref": "ACME",
         "user_id": "support@acme.example",
@@ -213,3 +223,7 @@ def test_comms_collection_uses_merchant_support_connector(monkeypatch) -> None:
         "connector_ref": "ACME",
         "domain": "demo.freshdesk.com",
     }
+    assert "#1001" in calls["gmail_query"]["query"]
+    assert "shopify_1001" in calls["gmail_query"]["query"]
+    assert "order_rzp_do_not_search" not in calls["gmail_query"]["query"]
+    assert calls["freshdesk_query"] == {"email": "buyer@example.com"}

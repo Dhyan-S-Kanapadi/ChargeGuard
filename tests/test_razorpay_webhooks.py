@@ -217,6 +217,109 @@ def test_production_reason_is_not_silently_mapped_to_network_code() -> None:
     assert state["decision"] == "ESCALATE_DEGRADED"
 
 
+def test_verified_configured_reason_mapping_schedules_graph(
+    monkeypatch, tmp_path
+) -> None:
+    assert store.create_merchant(_merchant())
+    mapping_path = tmp_path / "razorpay_reason_mappings.json"
+    mapping_path.write_text(
+        json.dumps(
+            {
+                "version": "verified-test-v1",
+                "mappings": [
+                    {
+                        "provider": "razorpay",
+                        "network": "VISA",
+                        "provider_reason_code": "unauthorised_transaction",
+                        "network_reason_code": "10.4",
+                        "source": "verified_test_fixture",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RAZORPAY_REASON_MAPPING_PATH", str(mapping_path))
+    calls: list[str] = []
+    monkeypatch.setattr(
+        webhooks,
+        "run_chargeback_graph",
+        lambda state: calls.append(state["chargeback_id"]),
+    )
+
+    response = _post(_raw_event())
+
+    assert response.status_code == 202
+    assert calls == ["disp_1"]
+    state = store.get_dispute("disp_1")["state"]
+    assert state["network_reason_code"] == "10.4"
+    assert state["reason_mapping_version"] == "verified-test-v1"
+    assert state["reason_mapping_source"] == "verified_test_fixture"
+
+
+def test_authenticated_classification_validates_and_resumes_exactly_once(
+    monkeypatch,
+) -> None:
+    assert store.create_merchant(_merchant())
+    assert _post(_raw_event()).status_code == 202
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "api.disputes.run_chargeback_graph",
+        lambda state: calls.append(state["chargeback_id"]),
+    )
+    client = TestClient(app)
+    payload = {
+        "card_network": "VISA",
+        "network_reason_code": "10.4",
+        "actor_id": "risk-operator-17",
+    }
+
+    assert client.post("/disputes/disp_1/classification", json=payload).status_code == 401
+    invalid = client.post(
+        "/disputes/disp_1/classification",
+        json={**payload, "network_reason_code": "not-supported"},
+        headers={"X-API-Key": "test-api-key"},
+    )
+    assert invalid.status_code == 422
+    classified = client.post(
+        "/disputes/disp_1/classification",
+        json=payload,
+        headers={"X-API-Key": "test-api-key"},
+    )
+    duplicate = client.post(
+        "/disputes/disp_1/classification",
+        json=payload,
+        headers={"X-API-Key": "test-api-key"},
+    )
+
+    assert classified.status_code == 200
+    assert classified.json()["status"] == "scheduled"
+    assert duplicate.status_code == 409
+    assert calls == ["disp_1"]
+    state = store.get_dispute("disp_1")["state"]
+    assert state["reason_code"] == "10.4"
+    assert state["classification_audit"]["actor_id"] == "risk-operator-17"
+    assert state["classification_audit"]["source"] == "authenticated_operator"
+    assert state["degraded_reasons"] == []
+
+
+def test_classification_rejects_card_network_conflict() -> None:
+    assert store.create_merchant(_merchant())
+    assert _post(_raw_event()).status_code == 202
+
+    response = TestClient(app).post(
+        "/disputes/disp_1/classification",
+        json={
+            "card_network": "MASTERCARD",
+            "network_reason_code": "4853",
+            "actor_id": "risk-operator-17",
+        },
+        headers={"X-API-Key": "test-api-key"},
+    )
+
+    assert response.status_code == 409
+
+
 def test_upi_dispute_never_becomes_rupay() -> None:
     assert store.create_merchant(_merchant())
 
@@ -254,7 +357,8 @@ def test_card_network_is_enriched_from_expanded_payment(monkeypatch) -> None:
     assert calls == [("pay_1", True)]
     state = store.get_dispute("disp_1")["state"]
     assert state["card_network"] == "MASTERCARD"
-    assert state["order_id"] == "order_enriched"
+    assert state["provider_order_id"] == "order_enriched"
+    assert "order_id" not in state
 
 
 def test_enrichment_failure_does_not_drop_event(monkeypatch) -> None:

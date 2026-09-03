@@ -23,6 +23,7 @@ from integrations.razorpay_schemas import (
     NormalizedRazorpayDispute,
     RazorpayWebhookEnvelope,
 )
+from integrations.razorpay_reason_mapping import resolve_reason_mapping
 from integrations.razorpay_webhook import normalize_dispute
 
 
@@ -80,12 +81,34 @@ def normalize_with_enrichment(
             )
         except (RazorpayConfigError, RazorpayRequestError) as exc:
             failure_reason = str(exc)
-    return normalize_dispute(
+    normalized = normalize_dispute(
         envelope,
         webhook_event_id=webhook_event_id,
         enriched_payment=enriched_payment,
         enrichment_failure_reason=failure_reason,
         allow_simulator_metadata=simulator_metadata_allowed(envelope),
+    )
+    if normalized.network_reason_code:
+        if simulator_metadata_allowed(envelope):
+            normalized = normalized.model_copy(
+                update={
+                    "reason_mapping_version": "simulator-v1",
+                    "reason_mapping_source": "signed_simulator_metadata",
+                }
+            )
+        return normalized
+    mapping = resolve_reason_mapping(
+        network=normalized.card_network,
+        provider_reason_code=normalized.provider_reason_code,
+    )
+    if mapping is None:
+        return normalized
+    return normalized.model_copy(
+        update={
+            "network_reason_code": mapping["network_reason_code"],
+            "reason_mapping_version": mapping["version"],
+            "reason_mapping_source": mapping["source"],
+        }
     )
 
 
@@ -104,7 +127,8 @@ def _playbook_available(network: str | None, reason_code: str | None) -> bool:
         playbooks = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    return reason_code in playbooks
+    template = PROJECT_ROOT / "documents" / "templates" / network.lower() / f"{reason_code}.md"
+    return reason_code in playbooks and template.is_file()
 
 
 def _manual_review_reasons(normalized: NormalizedRazorpayDispute) -> list[str]:
@@ -122,8 +146,6 @@ def _manual_review_reasons(normalized: NormalizedRazorpayDispute) -> list[str]:
         normalized.network_reason_code,
     ):
         reasons.append("network_playbook_unavailable")
-    if not normalized.order_id:
-        reasons.append("order_id_unavailable")
     if normalized.filing_deadline is None:
         reasons.append("respond_by_unavailable")
     elif normalized.deadline_overdue:
@@ -177,6 +199,10 @@ def _apply_provider_metadata(
     state["provider_reason_code"] = normalized.provider_reason_code
     if normalized.network_reason_code:
         state["network_reason_code"] = normalized.network_reason_code
+    if normalized.reason_mapping_version:
+        state["reason_mapping_version"] = normalized.reason_mapping_version
+    if normalized.reason_mapping_source:
+        state["reason_mapping_source"] = normalized.reason_mapping_source
     if normalized.payment_rail:
         state["payment_rail"] = normalized.payment_rail
     state["deadline_overdue"] = normalized.deadline_overdue
@@ -184,8 +210,8 @@ def _apply_provider_metadata(
         state["provider_respond_by"] = normalized.filing_deadline
     if normalized.card_network:
         state["card_network"] = normalized.card_network
-    if normalized.order_id:
-        state["order_id"] = normalized.order_id
+    if normalized.provider_order_id or normalized.order_id:
+        state["provider_order_id"] = normalized.provider_order_id or normalized.order_id or ""
     return True
 
 
@@ -198,7 +224,7 @@ def _new_state(
     deadline = normalized.filing_deadline or received_at
     state = build_initial_state(
         chargeback_id=normalized.chargeback_id,
-        order_id=normalized.order_id,
+        order_id=None,
         payment_id=normalized.payment_id,
         reason_code=normalized.network_reason_code or "",
         card_network=normalized.card_network,

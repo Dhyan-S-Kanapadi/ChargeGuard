@@ -115,6 +115,28 @@ class OrderIngestRequest(BaseModel):
     user_agent: str = Field(min_length=1, max_length=2000)
     shipping_address: str | dict[str, Any]
     order_date: datetime
+    payment_provider: Literal["razorpay", "stripe"] | None = None
+    provider_payment_id: str | None = Field(default=None, min_length=1, max_length=200)
+    provider_order_id: str | None = Field(default=None, min_length=1, max_length=200)
+    commerce_order_number: str | None = Field(default=None, min_length=1, max_length=200)
+    tracking_id: str | None = Field(default=None, min_length=1, max_length=200)
+    fulfillment_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @field_validator(
+        "provider_payment_id",
+        "provider_order_id",
+        "commerce_order_number",
+        "tracking_id",
+        "fulfillment_id",
+        mode="before",
+    )
+    @classmethod
+    def reject_blank_optional_identifiers(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("optional order identifiers must be non-empty strings")
+        return value.strip()
 
     @field_validator("customer_email")
     @classmethod
@@ -156,6 +178,26 @@ class OrderIngestResponse(BaseModel):
     status: Literal["created", "updated"]
     merchant_id: str
     order_id: str
+
+
+class DisputeClassificationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    card_network: Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"]
+    network_reason_code: str = Field(min_length=1, max_length=20)
+    actor_id: str = Field(min_length=1, max_length=200)
+
+    @field_validator("network_reason_code", "actor_id")
+    @classmethod
+    def strip_classification_values(cls, value: str) -> str:
+        return value.strip()
+
+
+class DisputeClassificationResponse(BaseModel):
+    chargeback_id: str
+    status: Literal["scheduled"]
+    card_network: str
+    network_reason_code: str
 
 
 class ShopifySyncResponse(BaseModel):

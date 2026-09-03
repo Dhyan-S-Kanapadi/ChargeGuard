@@ -140,7 +140,7 @@ def test_device_agent_marks_collection_failure_as_degraded(monkeypatch) -> None:
 
     assert result["device"] is None
     assert result["evidence_collection_degraded"] is True
-    assert result["degraded_reasons"] == ["device"]
+    assert result["degraded_reasons"] == ["device_provider_unavailable"]
 
 
 def test_device_agent_collects_and_normalizes_seon(monkeypatch) -> None:

@@ -229,5 +229,6 @@ def test_transaction_agent_records_empty_evidence_on_collection_failure(monkeypa
     assert result["transaction"]["amount"] == 0.0
     assert result["transaction"]["otp_verified"] is False
     assert result["transaction"]["raw"]["source"] == "transaction_agent_empty"
-    assert result["transaction"]["raw"]["error"] == "provider unavailable"
+    assert result["transaction"]["raw"]["error"] == "transaction_provider_unavailable"
+    assert "transaction_provider_unavailable" in result["degraded_reasons"]
     assert result["shipping"] is None

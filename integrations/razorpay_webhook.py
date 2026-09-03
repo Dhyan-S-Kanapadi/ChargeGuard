@@ -219,6 +219,7 @@ def normalize_dispute(
         chargeback_id=dispute.id,
         payment_id=dispute.payment_id,
         order_id=payment.order_id if payment else None,
+        provider_order_id=payment.order_id if payment else None,
         dispute_amount=Decimal(dispute.amount) / Decimal("100"),
         currency=dispute.currency.upper(),
         filing_deadline=deadline,

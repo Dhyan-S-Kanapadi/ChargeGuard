@@ -9,6 +9,7 @@ from agents.evidence.consortium import consortium_agent
 from agents.evidence.delivery_photo import delivery_photo_agent
 from agents.evidence.device import device_agent
 from agents.evidence.order_timeline import order_timeline_agent
+from agents.evidence.order_correlation import order_correlation_agent
 from agents.evidence.purchase_history import purchase_history_agent
 from agents.evidence.shipping import shipping_agent
 from agents.evidence.transaction import transaction_agent
@@ -75,8 +76,10 @@ def build_graph():
     graph.add_node("orchestrator", orchestrator_agent)
     graph.add_node("transaction_evidence", transaction_agent)
     graph.add_node("shipping_evidence", shipping_agent)
+    graph.add_node("order_correlation", order_correlation_agent)
     graph.add_node("expedited_transaction_evidence", transaction_agent)
     graph.add_node("expedited_shipping_evidence", shipping_agent)
+    graph.add_node("expedited_order_correlation", order_correlation_agent)
     graph.add_node("device_evidence", device_agent)
     graph.add_node("comms_evidence", comms_agent)
     graph.add_node("consortium_evidence", consortium_agent)
@@ -100,9 +103,11 @@ def build_graph():
             "expedited": "expedited_transaction_evidence",
         },
     )
-    graph.add_edge("transaction_evidence", "shipping_evidence")
+    graph.add_edge("transaction_evidence", "order_correlation")
+    graph.add_edge("order_correlation", "shipping_evidence")
     graph.add_edge("shipping_evidence", "device_evidence")
-    graph.add_edge("expedited_transaction_evidence", "expedited_shipping_evidence")
+    graph.add_edge("expedited_transaction_evidence", "expedited_order_correlation")
+    graph.add_edge("expedited_order_correlation", "expedited_shipping_evidence")
     graph.add_conditional_edges(
         "expedited_shipping_evidence",
         route_ce3_evidence,

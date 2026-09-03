@@ -32,6 +32,22 @@ def _customer_email(state: ChargebackState) -> str:
     return transaction["customer_email"] if transaction else ""
 
 
+def _commerce_references(state: ChargebackState) -> list[str]:
+    references = list(
+        dict.fromkeys(
+            value
+            for value in (
+                state.get("commerce_order_number"),
+                state.get("commerce_order_id"),
+            )
+            if value
+        )
+    )
+    if not references and state.get("provider") != "razorpay" and state.get("order_id"):
+        references.append(state["order_id"])
+    return references
+
+
 def _parse_datetime(value: Any) -> datetime | None:
     if not value:
         return None
@@ -51,7 +67,8 @@ def _parse_datetime(value: Any) -> datetime | None:
 
 
 def _stub_email_response(state: ChargebackState) -> list[dict[str, Any]]:
-    order_id = state.get("order_id", state["chargeback_id"])
+    references = _commerce_references(state)
+    order_id = references[0] if references else state.get("order_id", state["chargeback_id"])
     email = _customer_email(state) or "customer@example.com"
     delivered_at = (
         state["shipping"]["delivered_at"]
@@ -104,11 +121,13 @@ def _normalize_gmail_message(
 
 
 def _collect_gmail(state: ChargebackState) -> list[dict[str, Any]]:
-    order_id = state.get("order_id")
-    if not order_id:
-        raise ValueError("Gmail collection requires order_id")
+    references = _commerce_references(state)
+    if not references:
+        raise ValueError("Gmail collection requires a commerce order reference")
     customer_email = _customer_email(state)
-    query = f'"{order_id}"'
+    if not customer_email:
+        raise ValueError("Gmail collection requires customer email")
+    query = "(" + " OR ".join(f'\"{reference}\"' for reference in references) + ")"
     if customer_email:
         query = f'{query} (from:{customer_email} OR to:{customer_email})'
     merchant = state["merchant_profile"]
@@ -123,20 +142,22 @@ def _collect_freshdesk(state: ChargebackState) -> list[dict[str, Any]]:
     customer_email = _customer_email(state)
     if not customer_email:
         raise ValueError("Freshdesk collection requires customer email")
-    order_id = state.get("order_id", "").lower()
+    references = [reference.casefold() for reference in _commerce_references(state)]
+    if not references:
+        raise ValueError("Freshdesk collection requires a commerce order reference")
     merchant = state["merchant_profile"]
     tickets = FreshdeskClient.from_env(
         connector_ref=merchant.get("support_connector_ref"),
         domain=merchant.get("freshdesk_domain") or None,
     ).search_tickets(email=customer_email)
-    if not order_id:
-        return tickets
     return [
         ticket
         for ticket in tickets
-        if order_id in str(ticket.get("subject", "")).lower()
-        or order_id in str(ticket.get("description_text", "")).lower()
-        or order_id in str(ticket.get("custom_fields", {})).lower()
+        if any(
+            reference in str(ticket.get(field, "")).casefold()
+            for reference in references
+            for field in ("subject", "description_text", "custom_fields")
+        )
     ]
 
 
@@ -198,6 +219,8 @@ def _build_comms_evidence(
 def _collect_communications(
     state: ChargebackState,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    if not _commerce_references(state):
+        raise ValueError("Communication collection requires a commerce order reference")
     if _comms_use_stubs("gmail") and _comms_use_stubs("freshdesk"):
         return _stub_email_response(state), [], {}
 
@@ -207,28 +230,28 @@ def _collect_communications(
     else:
         try:
             emails = _collect_gmail(state)
-        except GmailConfigError as exc:
-            logger.warning("Gmail credentials are unavailable: %s", exc)
+        except GmailConfigError:
+            logger.warning("Gmail credentials are unavailable")
             emails = []
-            errors["gmail_credentials_missing"] = str(exc)
-        except Exception as exc:
-            logger.warning("Gmail evidence collection failed: %s", exc)
+            errors["gmail_credentials_missing"] = "gmail_credentials_missing"
+        except Exception:
+            logger.warning("Gmail evidence collection failed")
             emails = []
-            errors["gmail"] = str(exc)
+            errors["gmail_provider_unavailable"] = "gmail_provider_unavailable"
 
     if _comms_use_stubs("freshdesk"):
         tickets = []
     else:
         try:
             tickets = _collect_freshdesk(state)
-        except FreshdeskConfigError as exc:
-            logger.warning("Freshdesk credentials are unavailable: %s", exc)
+        except FreshdeskConfigError:
+            logger.warning("Freshdesk credentials are unavailable")
             tickets = []
-            errors["freshdesk_credentials_missing"] = str(exc)
-        except Exception as exc:
-            logger.warning("Freshdesk evidence collection failed: %s", exc)
+            errors["freshdesk_credentials_missing"] = "freshdesk_credentials_missing"
+        except Exception:
+            logger.warning("Freshdesk evidence collection failed")
             tickets = []
-            errors["freshdesk"] = str(exc)
+            errors["freshdesk_provider_unavailable"] = "freshdesk_provider_unavailable"
     return emails, tickets, errors
 
 
@@ -243,19 +266,23 @@ def comms_agent(state: ChargebackState) -> ChargebackState:
             tickets,
             source_errors=errors,
         )
-        for reason in ("gmail_credentials_missing", "freshdesk_credentials_missing"):
+        for reason in errors:
             if reason in errors:
                 state["evidence_collection_degraded"] = True
                 degraded_reasons = state.setdefault("degraded_reasons", [])
                 if reason not in degraded_reasons:
                     degraded_reasons.append(reason)
-    except Exception as exc:
-        logger.exception("Communication evidence processing failed")
+    except Exception:
+        logger.error("Communication evidence processing failed")
         state["comms"] = {
             "emails": [],
             "support_tickets": [],
             "post_delivery_interaction": False,
             "complaint_raised_before_chargeback": False,
-            "raw": {"source": "comms_agent_empty", "error": str(exc)},
+            "raw": {"source": "comms_agent_empty", "error": "comms_processing_failed"},
         }
+        state["evidence_collection_degraded"] = True
+        degraded_reasons = state.setdefault("degraded_reasons", [])
+        if "comms_processing_failed" not in degraded_reasons:
+            degraded_reasons.append("comms_processing_failed")
     return state
