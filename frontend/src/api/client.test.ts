@@ -50,4 +50,26 @@ describe("ApiClient", () => {
     const request = new ApiClient("http://localhost", "key").askAssistant("question");
     await expect(request).rejects.toEqual(expect.objectContaining({ status: 429, retryAfter: 7, message: "body.question: too short" }));
   });
+
+  it("sends suggestion approval through the authenticated classification endpoint", async () => {
+    let body: unknown;
+    let apiKey: string | null = null;
+    server.use(http.post("http://localhost/disputes/disp_1/classification", async ({ request }) => {
+      body = await request.json();
+      apiKey = request.headers.get("X-API-Key");
+      return HttpResponse.json({ chargeback_id: "disp_1", status: "scheduled", card_network: "VISA", network_reason_code: "10.4" });
+    }));
+
+    await new ApiClient("http://localhost", "secret-test-key").classifyDispute(
+      "disp_1", "VISA", "10.4", "operator-1", "rcs_1",
+    );
+
+    expect(apiKey).toBe("secret-test-key");
+    expect(body).toEqual({
+      card_network: "VISA",
+      network_reason_code: "10.4",
+      actor_id: "operator-1",
+      suggestion_id: "rcs_1",
+    });
+  });
 });

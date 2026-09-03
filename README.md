@@ -639,6 +639,39 @@ Deploying ChargeGuard does not create a Razorpay chargeback. Razorpay creates di
 
 Razorpay Test API keys do not expose a public create-dispute endpoint. Deployment only makes ChargeGuard's webhook reachable; the simulator does not create a real Razorpay dispute. JSON persistence remains appropriate only for one-process staging. Multi-worker production requires a shared transactional database and durable queue/outbox.
 
+### Human-reviewed reason-code suggestions
+
+Deterministic verified Razorpay-to-network mappings remain the authoritative first path. For
+an otherwise safe card dispute blocked only because its network reason code is unavailable,
+operators may optionally request a constrained recommendation with the authenticated
+`POST /disputes/{chargeback_id}/classification/suggestion` endpoint. The model receives only
+bounded normalized provider fields and reason codes that already have a playbook and rebuttal
+template for the verified card network.
+
+The response is an AI recommendation, not a card-network decision or calibrated probability.
+It is persisted for audit and does not alter the classification or start the evidence graph.
+An operator must approve the exact pending suggestion by sending its `suggestion_id`, verified
+network, recommended reason code, and `actor_id` to the existing
+`POST /disputes/{chargeback_id}/classification` endpoint. Operators can reject a suggestion or
+use the unchanged manual classification fallback. Disabled configuration, missing credentials,
+timeouts, malformed output, low confidence, and unrelated degradation leave the dispute in
+manual review.
+
+Configure the optional feature with:
+
+```env
+REASON_CLASSIFICATION_ENABLED=false
+REASON_CLASSIFICATION_USE_STUBS=
+REASON_CLASSIFICATION_MODEL=claude-sonnet-5
+REASON_CLASSIFICATION_MIN_CONFIDENCE=0.85
+REASON_CLASSIFICATION_TIMEOUT_SECONDS=20
+```
+
+Live calls also require `ANTHROPIC_API_KEY`. An unset stub override follows
+`CHARGEGUARD_USE_STUBS`. This LLM integration must never infer a card network, correlate an
+order, change deadlines or financial state, make contest/scoring decisions, generate evidence,
+or submit a response.
+
 ## Generated Outputs
 
 Rebuttal PDFs are written to:

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   AssistantResponseSchema,
+  ClassificationSuggestionSchema,
   DisputeDetailSchema,
   DisputeSummarySchema,
   HealthSchema,
@@ -158,6 +159,41 @@ export class ApiClient {
     });
   }
 
+  classificationSuggestion(id: string, actorId: string) {
+    return this.request(`/disputes/${encodeURIComponent(id)}/classification/suggestion`, {
+      method: "POST",
+      body: { actor_id: actorId },
+      schema: ClassificationSuggestionSchema,
+    });
+  }
+
+  classifyDispute(
+    id: string,
+    cardNetwork: string,
+    reasonCode: string,
+    actorId: string,
+    suggestionId?: string,
+  ) {
+    return this.request(`/disputes/${encodeURIComponent(id)}/classification`, {
+      method: "POST",
+      body: {
+        card_network: cardNetwork,
+        network_reason_code: reasonCode,
+        actor_id: actorId,
+        suggestion_id: suggestionId || null,
+      },
+      schema: classificationResponseSchema,
+    });
+  }
+
+  rejectClassificationSuggestion(id: string, suggestionId: string, actorId: string) {
+    return this.request(`/disputes/${encodeURIComponent(id)}/classification/suggestion/reject`, {
+      method: "POST",
+      body: { suggestion_id: suggestionId, actor_id: actorId },
+      schema: ClassificationSuggestionSchema,
+    });
+  }
+
   askAssistant(question: string, chargebackId?: string, signal?: AbortSignal) {
     return this.request("/assistant/query", {
       method: "POST",
@@ -227,3 +263,9 @@ const recoveryResultSchema = z.object({
 });
 const reconciliationResultSchema = z.object({ count: z.number(), results: z.array(z.record(z.string(), z.unknown())) });
 const simulatorResultSchema = z.object({ dispute_id: z.string(), event_id: z.string(), event_name: z.string() }).passthrough();
+const classificationResponseSchema = z.object({
+  chargeback_id: z.string(),
+  status: z.literal("scheduled"),
+  card_network: z.string(),
+  network_reason_code: z.string(),
+});

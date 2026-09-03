@@ -1,6 +1,8 @@
 from copy import deepcopy
+from datetime import datetime, timezone
 import os
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 
@@ -8,6 +10,9 @@ from analytics.merchant_stats import merchant_dispute_ratio
 from api.auth import require_api_key
 from api.schemas import (
     CaseSummaryResponse,
+    ClassificationSuggestionRejectRequest,
+    ClassificationSuggestionRequest,
+    ClassificationSuggestionResponse,
     DisputeDetail,
     DisputeClassificationRequest,
     DisputeClassificationResponse,
@@ -17,13 +22,21 @@ from api.schemas import (
 )
 from api.store import store
 from api.webhooks import run_chargeback_graph
-from api.razorpay_service import _playbook_available
+from api.razorpay_service import _playbook_available, reason_classification_candidates
 from core.outcomes import (
     OutcomeConflictError,
     OutcomeNotEligibleError,
     record_adjudicated_outcome,
 )
 from integrations.case_summary import generate_case_summary
+from integrations.reason_classification import (
+    PROMPT_SCHEMA_VERSION,
+    ReasonClassificationConfigError,
+    ReasonClassificationRequestError,
+    generate_reason_recommendation,
+    reason_classification_enabled,
+    reason_classification_min_confidence,
+)
 
 
 router = APIRouter(
@@ -146,6 +159,188 @@ def get_dispute_summary(chargeback_id: str) -> CaseSummaryResponse:
     return CaseSummaryResponse(chargeback_id=chargeback_id, human_review_summary=summary)
 
 
+_CLASSIFICATION_REASONS = frozenset(
+    {"network_reason_code_unavailable", "network_playbook_unavailable"}
+)
+
+
+def _suggestion_ineligibility(record: dict[str, Any]) -> str | None:
+    state = record["state"]
+    if record.get("status") != "completed":
+        return "dispute_processing_not_complete"
+    if state.get("provider") != "razorpay":
+        return "unsupported_provider"
+    if state.get("provider_event") != "payment.dispute.created":
+        return "unsupported_provider_event"
+    if state.get("payment_rail") != "CARD":
+        return "non_card_payment"
+    if not state.get("card_network"):
+        return "verified_card_network_unavailable"
+    if state.get("network_reason_code"):
+        return "network_reason_code_already_available"
+    if (
+        state.get("decision") != "ESCALATE_DEGRADED"
+        or not state.get("requires_human_review")
+    ):
+        return "classification_manual_review_not_active"
+    reasons = set(state.get("degraded_reasons", []))
+    if "network_reason_code_unavailable" not in reasons:
+        return "network_reason_code_review_not_active"
+    if reasons - _CLASSIFICATION_REASONS:
+        return "unrelated_manual_review_blocker"
+    deadline = state.get("provider_respond_by")
+    if not isinstance(deadline, datetime):
+        return "filing_deadline_unavailable"
+    normalized_deadline = deadline.replace(tzinfo=deadline.tzinfo or timezone.utc)
+    if state.get("deadline_overdue") or normalized_deadline <= datetime.now(timezone.utc):
+        return "filing_deadline_overdue"
+    if state.get("classification_resume_scheduled"):
+        return "classification_already_scheduled"
+    return None
+
+
+def _suggestion_response(
+    suggestion: dict[str, Any],
+    *,
+    minimum_confidence: float,
+) -> ClassificationSuggestionResponse:
+    can_approve = bool(
+        suggestion.get("status") == "pending"
+        and suggestion.get("recommended_reason_code")
+        and suggestion.get("confidence", 0) >= minimum_confidence
+        and _playbook_available(
+            suggestion.get("card_network"),
+            suggestion.get("recommended_reason_code"),
+        )
+    )
+    return ClassificationSuggestionResponse(
+        suggestion_id=suggestion["suggestion_id"],
+        card_network=suggestion["card_network"],
+        recommended_reason_code=suggestion.get("recommended_reason_code"),
+        confidence=suggestion["confidence"],
+        rationale=suggestion["rationale"],
+        evidence_fields_used=suggestion.get("evidence_fields_used", []),
+        status=suggestion["status"],
+        can_approve=can_approve,
+        unavailability_reason=suggestion.get("unavailability_reason"),
+    )
+
+
+@router.post(
+    "/{chargeback_id}/classification/suggestion",
+    response_model=ClassificationSuggestionResponse,
+)
+def suggest_dispute_classification(
+    chargeback_id: str,
+    payload: ClassificationSuggestionRequest,
+) -> ClassificationSuggestionResponse:
+    record = store.get_dispute(chargeback_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Dispute not found.")
+    ineligibility = _suggestion_ineligibility(record)
+    if ineligibility:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Dispute is not eligible for an AI suggestion: {ineligibility}.",
+        )
+    try:
+        minimum_confidence = reason_classification_min_confidence()
+    except ReasonClassificationConfigError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Reason classification configuration is unavailable.",
+        ) from exc
+
+    state = record["state"]
+    existing = state.get("classification_suggestion")
+    if existing and existing.get("status") == "pending":
+        return _suggestion_response(existing, minimum_confidence=minimum_confidence)
+    if not reason_classification_enabled():
+        raise HTTPException(status_code=503, detail="AI reason classification is disabled.")
+
+    network = state["card_network"]
+    candidates = reason_classification_candidates(network)
+    if not candidates:
+        raise HTTPException(
+            status_code=503,
+            detail="No verified reason-code candidates are available for this card network.",
+        )
+    try:
+        result, model = generate_reason_recommendation(state, candidates)
+    except (ReasonClassificationConfigError, ReasonClassificationRequestError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="AI reason classification is temporarily unavailable; use manual classification.",
+        ) from exc
+
+    allowed_codes = {candidate["reason_code"] for candidate in candidates}
+    code = result.recommended_reason_code
+    if code is not None and (
+        code not in allowed_codes or not _playbook_available(network, code)
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="AI reason classification returned an invalid recommendation; use manual classification.",
+        )
+    if result.cannot_classify:
+        status = "unavailable"
+        unavailable_reason = "model_could_not_classify"
+    elif result.confidence < minimum_confidence:
+        status = "unavailable"
+        unavailable_reason = "confidence_below_threshold"
+    else:
+        status = "pending"
+        unavailable_reason = None
+    suggestion = {
+        "suggestion_id": f"rcs_{uuid4().hex}",
+        "card_network": network,
+        "recommended_reason_code": code,
+        "confidence": result.confidence,
+        "rationale": result.rationale,
+        "evidence_fields_used": result.evidence_fields_used,
+        "model": model,
+        "prompt_schema_version": PROMPT_SCHEMA_VERSION,
+        "created_at": datetime.now(timezone.utc),
+        "requested_by_actor_id": payload.actor_id,
+        "status": status,
+        "unavailability_reason": unavailable_reason,
+    }
+    saved = store.save_classification_suggestion(chargeback_id, suggestion)
+    if saved is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Dispute classification changed while the suggestion was generated.",
+        )
+    return _suggestion_response(saved, minimum_confidence=minimum_confidence)
+
+
+@router.post(
+    "/{chargeback_id}/classification/suggestion/reject",
+    response_model=ClassificationSuggestionResponse,
+)
+def reject_dispute_classification_suggestion(
+    chargeback_id: str,
+    payload: ClassificationSuggestionRejectRequest,
+) -> ClassificationSuggestionResponse:
+    if store.get_dispute(chargeback_id) is None:
+        raise HTTPException(status_code=404, detail="Dispute not found.")
+    try:
+        suggestion = store.reject_classification_suggestion(
+            chargeback_id,
+            suggestion_id=payload.suggestion_id,
+            actor_id=payload.actor_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if suggestion is None:
+        raise HTTPException(status_code=409, detail="Classification suggestion is no longer pending.")
+    try:
+        minimum_confidence = reason_classification_min_confidence()
+    except ReasonClassificationConfigError:
+        minimum_confidence = 1.0
+    return _suggestion_response(suggestion, minimum_confidence=minimum_confidence)
+
+
 @router.post(
     "/{chargeback_id}/classification",
     response_model=DisputeClassificationResponse,
@@ -169,12 +364,23 @@ def classify_dispute(
             status_code=422,
             detail="No supported playbook and rebuttal template exist for this classification.",
         )
+    minimum_suggestion_confidence = None
+    if payload.suggestion_id is not None:
+        try:
+            minimum_suggestion_confidence = reason_classification_min_confidence()
+        except ReasonClassificationConfigError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Reason classification configuration is unavailable.",
+            ) from exc
     try:
         state = store.claim_dispute_classification(
             chargeback_id,
             card_network=payload.card_network,
             network_reason_code=payload.network_reason_code,
             actor_id=payload.actor_id,
+            suggestion_id=payload.suggestion_id,
+            minimum_suggestion_confidence=minimum_suggestion_confidence,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

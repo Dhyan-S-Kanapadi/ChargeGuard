@@ -52,6 +52,18 @@ export const DisputeSummarySchema = z.object({
   updated_at: z.string(),
 });
 
+export const ClassificationSuggestionSchema = z.object({
+  suggestion_id: z.string(),
+  card_network: z.string(),
+  recommended_reason_code: z.string().nullable(),
+  confidence: z.number().min(0).max(1),
+  rationale: z.string(),
+  evidence_fields_used: z.array(z.string()),
+  status: z.enum(["pending", "approved", "rejected", "unavailable"]),
+  can_approve: z.boolean().optional(),
+  unavailability_reason: z.string().nullable().optional(),
+});
+
 const ScoreSchema = z.object({
   score: z.number(),
   label: z.string(),
@@ -101,6 +113,12 @@ export const DisputeStateSchema = z.object({
   identity_continuity: ScoreSchema.nullable().optional(),
   contradiction_summary: z.string().nullable().optional(),
   human_review_summary: z.string().nullable().optional(),
+  classification_suggestion: ClassificationSuggestionSchema.extend({
+    model: z.string().optional(),
+    prompt_schema_version: z.string().optional(),
+    created_at: z.string().optional(),
+    requested_by_actor_id: z.string().optional(),
+  }).optional(),
   quality_approved: z.boolean(),
   filing_confirmation: z.string().nullable(),
   filed_at: z.string().nullable(),
@@ -188,6 +206,7 @@ export type Merchant = z.infer<typeof MerchantSchema>;
 export type DisputeSummary = z.infer<typeof DisputeSummarySchema>;
 export type DisputeState = z.infer<typeof DisputeStateSchema>;
 export type DisputeDetail = z.infer<typeof DisputeDetailSchema>;
+export type ClassificationSuggestion = z.infer<typeof ClassificationSuggestionSchema>;
 export type Stats = z.infer<typeof StatsSchema>;
 export type ProviderEvent = z.infer<typeof ProviderEventSchema>;
 export type SimulatorDispute = z.infer<typeof SimulatorDisputeSchema>;

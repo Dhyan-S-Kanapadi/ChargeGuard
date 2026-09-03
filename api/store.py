@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from core.state import ChargebackState, MerchantProfile, OrderRecord
+from core.state import ClassificationSuggestion, ChargebackState, MerchantProfile, OrderRecord
 
 
 PROVIDER_EVENT_STATES = frozenset(
@@ -301,6 +301,8 @@ class InMemoryStore:
         card_network: str,
         network_reason_code: str,
         actor_id: str,
+        suggestion_id: str | None = None,
+        minimum_suggestion_confidence: float | None = None,
     ) -> ChargebackState | None:
         """Atomically persist a valid operator classification and claim one graph run."""
         with self._lock:
@@ -338,19 +340,61 @@ class InMemoryStore:
                     + ", ".join(remaining)
                 )
 
+            suggestion = state.get("classification_suggestion")
+            if suggestion_id is not None:
+                deadline = state.get("provider_respond_by")
+                deadline_valid = isinstance(deadline, datetime) and deadline.replace(
+                    tzinfo=deadline.tzinfo or timezone.utc
+                ) > datetime.now(timezone.utc)
+                if not suggestion or suggestion.get("suggestion_id") != suggestion_id:
+                    raise ValueError("Classification suggestion does not belong to this dispute.")
+                if suggestion.get("status") != "pending":
+                    raise ValueError("Classification suggestion is no longer pending.")
+                if (
+                    state.get("card_network") != card_network
+                    or state.get("network_reason_code")
+                    or state.get("deadline_overdue")
+                    or not deadline_valid
+                ):
+                    raise ValueError("Classification suggestion is no longer eligible for approval.")
+                if (
+                    suggestion.get("card_network") != card_network
+                    or suggestion.get("recommended_reason_code") != network_reason_code
+                ):
+                    raise ValueError(
+                        "Submitted classification does not match the pending suggestion."
+                    )
+                if (
+                    minimum_suggestion_confidence is None
+                    or suggestion.get("confidence", -1) < minimum_suggestion_confidence
+                ):
+                    raise ValueError("Classification suggestion is below the approval threshold.")
+
             now = datetime.now(timezone.utc)
             state["card_network"] = card_network
             state["network_reason_code"] = network_reason_code
             state["reason_code"] = network_reason_code
             state["reason_mapping_version"] = "operator-v1"
-            state["reason_mapping_source"] = "manual_classification"
+            source = "llm_assisted_operator" if suggestion_id is not None else "authenticated_operator"
+            state["reason_mapping_source"] = (
+                "llm_assisted_operator" if suggestion_id is not None else "manual_classification"
+            )
             state["classification_audit"] = {
                 "actor_id": actor_id,
                 "classified_at": now,
-                "source": "authenticated_operator",
+                "source": source,
                 "card_network": card_network,
                 "network_reason_code": network_reason_code,
             }
+            if suggestion_id is not None and suggestion is not None:
+                suggestion["status"] = "approved"
+                suggestion["resolved_at"] = now
+                suggestion["resolved_by_actor_id"] = actor_id
+            elif suggestion and suggestion.get("status") == "pending":
+                suggestion["status"] = "rejected"
+                suggestion["unavailability_reason"] = "manual_classification_used"
+                suggestion["resolved_at"] = now
+                suggestion["resolved_by_actor_id"] = actor_id
             state["classification_resume_scheduled"] = True
             state["degraded_reasons"] = []
             state["evidence_collection_degraded"] = False
@@ -367,6 +411,73 @@ class InMemoryStore:
             record["updated_at"] = now
             self._save()
             return deepcopy(state)
+
+    def save_classification_suggestion(
+        self,
+        chargeback_id: str,
+        suggestion: ClassificationSuggestion,
+    ) -> ClassificationSuggestion | None:
+        """Persist a recommendation only while its dispute is still unresolved."""
+        with self._lock:
+            record = self._disputes.get(chargeback_id)
+            if record is None:
+                raise KeyError(chargeback_id)
+            state = record["state"]
+            existing = state.get("classification_suggestion")
+            reasons = set(state.get("degraded_reasons", []))
+            deadline = state.get("provider_respond_by")
+            deadline_valid = isinstance(deadline, datetime) and deadline.replace(
+                tzinfo=deadline.tzinfo or timezone.utc
+            ) > datetime.now(timezone.utc)
+            if (
+                record.get("status") != "completed"
+                or state.get("classification_resume_scheduled")
+                or state.get("network_reason_code")
+                or state.get("card_network") != suggestion["card_network"]
+                or state.get("decision") != "ESCALATE_DEGRADED"
+                or not state.get("requires_human_review")
+                or state.get("provider") != "razorpay"
+                or state.get("provider_event") != "payment.dispute.created"
+                or state.get("payment_rail") != "CARD"
+                or "network_reason_code_unavailable" not in reasons
+                or reasons - {
+                    "network_reason_code_unavailable",
+                    "network_playbook_unavailable",
+                }
+                or state.get("deadline_overdue")
+                or not deadline_valid
+            ):
+                return None
+            if existing and existing.get("status") == "pending":
+                return deepcopy(existing)
+            state["classification_suggestion"] = deepcopy(suggestion)
+            record["updated_at"] = datetime.now(timezone.utc)
+            self._save()
+            return deepcopy(suggestion)
+
+    def reject_classification_suggestion(
+        self,
+        chargeback_id: str,
+        *,
+        suggestion_id: str,
+        actor_id: str,
+    ) -> ClassificationSuggestion | None:
+        """Atomically record a human rejection without changing classification."""
+        with self._lock:
+            record = self._disputes.get(chargeback_id)
+            if record is None:
+                raise KeyError(chargeback_id)
+            suggestion = record["state"].get("classification_suggestion")
+            if not suggestion or suggestion.get("suggestion_id") != suggestion_id:
+                raise ValueError("Classification suggestion does not belong to this dispute.")
+            if suggestion.get("status") != "pending":
+                return None
+            suggestion["status"] = "rejected"
+            suggestion["resolved_at"] = datetime.now(timezone.utc)
+            suggestion["resolved_by_actor_id"] = actor_id
+            record["updated_at"] = suggestion["resolved_at"]
+            self._save()
+            return deepcopy(suggestion)
 
     def update_dispute(
         self,
