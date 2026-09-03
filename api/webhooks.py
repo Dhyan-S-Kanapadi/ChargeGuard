@@ -131,6 +131,16 @@ def build_initial_state(
     card_fingerprint: str | None = None,
 ) -> ChargebackState:
     received_at = received_at or datetime.now(timezone.utc)
+    safe_merchant_profile = {
+        key: value
+        for key, value in merchant_profile.items()
+        if key
+        not in {
+            "shopify_admin_api_token",
+            "woocommerce_api_key",
+            "woocommerce_api_secret",
+        }
+    }
     state: ChargebackState = {
         "chargeback_id": chargeback_id,
         "payment_id": payment_id,
@@ -140,7 +150,7 @@ def build_initial_state(
         "currency": currency,
         "filing_deadline": filing_deadline,
         "chargeback_received_at": received_at,
-        "merchant_profile": merchant_profile,
+        "merchant_profile": safe_merchant_profile,
         "investigation_plan": {},
         "requires_food_agents": False,
         "transaction": None,

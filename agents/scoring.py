@@ -71,7 +71,17 @@ def _predict_win_probability(state: ChargebackState) -> tuple[float, str]:
 
 def scoring_agent(state: ChargebackState) -> ChargebackState:
     """Predict win probability and apply the deterministic EV decision rule."""
-    win_probability, model_source = _predict_win_probability(state)
+    ce3_qualification = state.get("ce3_qualification") or {}
+    ce3_override = bool(
+        state.get("card_network") == "VISA"
+        and state.get("reason_code") == "10.4"
+        and ce3_qualification.get("qualifies")
+    )
+    state["ce3_override_applied"] = ce3_override
+    if ce3_override:
+        win_probability, model_source = 0.95, "visa_ce3_0"
+    else:
+        win_probability, model_source = _predict_win_probability(state)
     subscores: dict[str, dict[str, float | str]] | None = None
     if model_source == "logistic_regression":
         try:
@@ -84,7 +94,7 @@ def scoring_agent(state: ChargebackState) -> ChargebackState:
     fight_threshold = _float_env("FIGHT_EV_THRESHOLD", 0.0)
     expected_value = round((win_probability * state["dispute_amount"]) - response_cost, 2)
     is_degraded = state.get("evidence_collection_degraded", False)
-    model_failed = model_source != "logistic_regression"
+    model_failed = model_source not in {"logistic_regression", "visa_ce3_0"}
     state["requires_human_review"] = is_degraded or model_failed
     if is_degraded or model_failed:
         decision = "ESCALATE_DEGRADED"
@@ -119,7 +129,7 @@ def scoring_agent(state: ChargebackState) -> ChargebackState:
         f" {contradictions['summary']}" if contradictions["summary"] else ""
     )
     state["decision_reasoning"] = (
-        f"Model {model_source}; win probability {win_probability:.1%}; "
+        f"Probability source {model_source}; win probability {win_probability:.1%}; "
         f"expected value {expected_value:.2f} {state['currency']}; "
         f"threshold {fight_threshold:.2f}."
         + subscore_reason

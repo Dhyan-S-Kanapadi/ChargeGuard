@@ -9,6 +9,7 @@ from agents.evidence.consortium import consortium_agent
 from agents.evidence.delivery_photo import delivery_photo_agent
 from agents.evidence.device import device_agent
 from agents.evidence.order_timeline import order_timeline_agent
+from agents.evidence.purchase_history import purchase_history_agent
 from agents.evidence.shipping import shipping_agent
 from agents.evidence.transaction import transaction_agent
 from agents.escalation import human_escalation_agent
@@ -24,9 +25,17 @@ from core.state import ChargebackState, is_filed_dispute
 logger = logging.getLogger(__name__)
 
 
-def route_food_evidence(state: ChargebackState) -> Literal["food", "standard"]:
+def route_food_evidence(state: ChargebackState) -> Literal["food", "ce3", "standard"]:
     if state.get("requires_food_agents"):
         return "food"
+    if route_ce3_evidence(state) == "ce3":
+        return "ce3"
+    return "standard"
+
+
+def route_ce3_evidence(state: ChargebackState) -> Literal["ce3", "standard"]:
+    if state.get("card_network") == "VISA" and state.get("reason_code") == "10.4":
+        return "ce3"
     return "standard"
 
 
@@ -73,6 +82,7 @@ def build_graph():
     graph.add_node("consortium_evidence", consortium_agent)
     graph.add_node("delivery_photo_evidence", delivery_photo_agent)
     graph.add_node("order_timeline_evidence", order_timeline_agent)
+    graph.add_node("purchase_history_evidence", purchase_history_agent)
     graph.add_node("scoring", scoring_agent)
     graph.add_node("rebuttal_builder", rebuttal_builder_agent)
     graph.add_node("quality_check", quality_check_agent)
@@ -93,7 +103,11 @@ def build_graph():
     graph.add_edge("transaction_evidence", "shipping_evidence")
     graph.add_edge("shipping_evidence", "device_evidence")
     graph.add_edge("expedited_transaction_evidence", "expedited_shipping_evidence")
-    graph.add_edge("expedited_shipping_evidence", "scoring")
+    graph.add_conditional_edges(
+        "expedited_shipping_evidence",
+        route_ce3_evidence,
+        {"ce3": "purchase_history_evidence", "standard": "scoring"},
+    )
     graph.add_edge("device_evidence", "comms_evidence")
     graph.add_edge("comms_evidence", "consortium_evidence")
     graph.add_conditional_edges(
@@ -101,11 +115,17 @@ def build_graph():
         route_food_evidence,
         {
             "food": "delivery_photo_evidence",
+            "ce3": "purchase_history_evidence",
             "standard": "scoring",
         },
     )
     graph.add_edge("delivery_photo_evidence", "order_timeline_evidence")
-    graph.add_edge("order_timeline_evidence", "scoring")
+    graph.add_conditional_edges(
+        "order_timeline_evidence",
+        route_ce3_evidence,
+        {"ce3": "purchase_history_evidence", "standard": "scoring"},
+    )
+    graph.add_edge("purchase_history_evidence", "scoring")
     graph.add_conditional_edges(
         "scoring",
         route_decision,

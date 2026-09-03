@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from api.assistant import router as assistant_router
 from api.disputes import router as disputes_router
 from api.merchants import router as merchants_router
+from api.orders import router as orders_router
 from api.razorpay_admin import (
     router as razorpay_admin_router,
     schedule_startup_razorpay_recovery,
@@ -49,6 +50,7 @@ app = FastAPI(title="ChargeGuard AI", version="0.1.0", lifespan=_lifespan)
 app.include_router(webhooks_router)
 app.include_router(disputes_router)
 app.include_router(merchants_router)
+app.include_router(orders_router)
 app.include_router(stats_router)
 app.include_router(assistant_router)
 app.include_router(razorpay_admin_router)

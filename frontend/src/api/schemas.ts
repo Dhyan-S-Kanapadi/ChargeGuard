@@ -30,6 +30,15 @@ export const MerchantSchema = z.object({
   chargeback_history_count: z.number(),
   transaction_volume_30d_by_network: z.record(z.string(), z.number()),
   merchant_dispute_ratio: z.record(z.string(), MerchantRatioSchema),
+  store_url: z.string().nullable().optional(),
+  storefront_platform: z.enum(["shopify", "woocommerce", "custom", "unknown"]),
+  platform_credential_verified: z.boolean(),
+  platform_credential_verified_at: z.string().nullable().optional(),
+  platform_credential_verification_reason: z.string().nullable().optional(),
+});
+
+export const PlatformSuggestionSchema = z.object({
+  suggestion: z.enum(["shopify", "woocommerce", "custom", "unknown"]),
 });
 
 export const DisputeSummarySchema = z.object({

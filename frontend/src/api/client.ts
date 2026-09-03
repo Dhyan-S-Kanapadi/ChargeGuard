@@ -6,6 +6,7 @@ import {
   HealthSchema,
   MerchantSchema,
   OutcomeResponseSchema,
+  PlatformSuggestionSchema,
   ProviderEventSchema,
   SimulatorDisputeSchema,
   StatsSchema,
@@ -55,7 +56,7 @@ function errorMessage(payload: unknown, fallback: string): string {
 }
 
 type RequestOptions<T> = {
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PATCH";
   body?: unknown;
   auth?: boolean;
   schema: z.ZodType<T>;
@@ -122,6 +123,14 @@ export class ApiClient {
 
   createMerchant(body: Record<string, unknown>) {
     return this.request("/merchants", { method: "POST", body, schema: MerchantSchema });
+  }
+
+  suggestPlatform(storeUrl: string) {
+    return this.request("/merchants/platform-suggestion", {
+      method: "POST",
+      body: { store_url: storeUrl },
+      schema: PlatformSuggestionSchema,
+    });
   }
 
   disputeSummaries(signal?: AbortSignal) {
