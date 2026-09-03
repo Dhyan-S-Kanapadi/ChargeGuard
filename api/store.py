@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from core.state import ChargebackState, MerchantProfile
+from core.state import ChargebackState, MerchantProfile, OrderRecord
 
 
 PROVIDER_EVENT_STATES = frozenset(
@@ -28,6 +28,11 @@ NON_TERMINAL_PROVIDER_EVENT_STATES = frozenset(
     {"received", "queued", "processing"}
 )
 TERMINAL_PROVIDER_EVENT_STATES = PROVIDER_EVENT_STATES - NON_TERMINAL_PROVIDER_EVENT_STATES
+_MERCHANT_CREDENTIAL_KEYS = (
+    "shopify_admin_api_token",
+    "woocommerce_api_key",
+    "woocommerce_api_secret",
+)
 
 
 def _provider_event_claim_timeout_seconds() -> int:
@@ -62,6 +67,7 @@ class InMemoryStore:
         self._lock = RLock()
         self._path = Path(path) if path else None
         self._merchants: dict[str, MerchantProfile] = {}
+        self._orders: dict[str, OrderRecord] = {}
         self._disputes: dict[str, dict[str, Any]] = {}
         self._provider_events: dict[str, dict[str, Any]] = {}
         self._simulator_disputes: dict[str, dict[str, Any]] = {}
@@ -74,6 +80,7 @@ class InMemoryStore:
     def clear(self) -> None:
         with self._lock:
             self._merchants.clear()
+            self._orders.clear()
             self._disputes.clear()
             self._provider_events.clear()
             self._simulator_disputes.clear()
@@ -111,6 +118,80 @@ class InMemoryStore:
             )
             return deepcopy(profile) if profile else None
 
+    def list_merchants(self) -> list[MerchantProfile]:
+        with self._lock:
+            profiles = [deepcopy(profile) for profile in self._merchants.values()]
+        return sorted(profiles, key=lambda profile: profile["name"].casefold())
+
+    def update_merchant(self, merchant_id: str, updates: dict[str, Any]) -> MerchantProfile | None:
+        with self._lock:
+            profile = self._merchants.get(merchant_id)
+            if profile is None:
+                return None
+            account_id = updates.get("razorpay_account_id")
+            if account_id and any(
+                other_id != merchant_id and other.get("razorpay_account_id") == account_id
+                for other_id, other in self._merchants.items()
+            ):
+                raise ValueError("Razorpay account ID already exists.")
+            profile.update(deepcopy(updates))
+            self._save()
+            return deepcopy(profile)
+
+    def upsert_order(self, order: OrderRecord) -> bool:
+        """Create or replace one merchant-scoped order; returns True when created."""
+        key = self._order_key(order["merchant_id"], order["order_id"])
+        with self._lock:
+            created = key not in self._orders
+            value = deepcopy(order)
+            existing = self._orders.get(key)
+            if existing is not None:
+                value["is_disputed"] = existing["is_disputed"]
+                value["is_fraud_flagged"] = existing["is_fraud_flagged"]
+            if self._order_has_dispute(order["merchant_id"], order["order_id"]):
+                value["is_disputed"] = True
+            self._orders[key] = value
+            self._save()
+            return created
+
+    def get_order(self, merchant_id: str, order_id: str) -> OrderRecord | None:
+        with self._lock:
+            order = self._orders.get(self._order_key(merchant_id, order_id))
+            return deepcopy(order) if order else None
+
+    def query_orders(
+        self,
+        *,
+        merchant_id: str,
+        customer_email: str,
+        start: datetime,
+        end: datetime,
+        exclude_order_id: str | None = None,
+    ) -> list[OrderRecord]:
+        email = customer_email.strip().casefold()
+        with self._lock:
+            orders = [
+                deepcopy(order)
+                for order in self._orders.values()
+                if order["merchant_id"] == merchant_id
+                and order["customer_email"].strip().casefold() == email
+                and order["order_id"] != exclude_order_id
+                and start <= order["order_date"] <= end
+            ]
+        return sorted(orders, key=lambda order: order["order_date"], reverse=True)
+
+    @staticmethod
+    def _order_key(merchant_id: str, order_id: str) -> str:
+        return f"{merchant_id}\x1f{order_id}"
+
+    def _order_has_dispute(self, merchant_id: str, order_id: str) -> bool:
+        return any(
+            record.get("state", {}).get("order_id") == order_id
+            and record.get("state", {}).get("merchant_profile", {}).get("merchant_id")
+            == merchant_id
+            for record in self._disputes.values()
+        )
+
     def create_dispute(self, state: ChargebackState) -> bool:
         chargeback_id = state["chargeback_id"]
         now = datetime.now(timezone.utc)
@@ -125,6 +206,12 @@ class InMemoryStore:
                 "created_at": now,
                 "updated_at": now,
             }
+            merchant_id = state.get("merchant_profile", {}).get("merchant_id")
+            order_id = state.get("order_id")
+            if merchant_id and order_id:
+                order = self._orders.get(self._order_key(merchant_id, order_id))
+                if order is not None:
+                    order["is_disputed"] = True
             self._save()
             return True
 
@@ -377,11 +464,23 @@ class InMemoryStore:
             payload = json.load(handle, object_hook=_decode_json_value)
 
         merchants = payload.get("merchants", {})
+        orders = payload.get("orders", {})
         disputes = payload.get("disputes", {})
-        if not isinstance(merchants, dict) or not isinstance(disputes, dict):
-            raise ValueError("Store file must contain object maps for merchants and disputes.")
+        if not isinstance(merchants, dict) or not isinstance(orders, dict) or not isinstance(disputes, dict):
+            raise ValueError("Store file must contain object maps for merchants, orders, and disputes.")
 
         self._merchants = deepcopy(merchants)
+        for merchant in self._merchants.values():
+            merchant.setdefault("storefront_platform", "unknown")
+            if merchant.get("platform_credential_verified") and not any(
+                merchant.get(key) for key in _MERCHANT_CREDENTIAL_KEYS
+            ):
+                merchant["platform_credential_verified"] = False
+                merchant["platform_credential_verified_at"] = None
+                merchant["platform_credential_verification_reason"] = (
+                    "platform_credential_reverification_required"
+                )
+        self._orders = deepcopy(orders)
         self._disputes = deepcopy(disputes)
         provider_events = payload.get("provider_events", {})
         simulator_disputes = payload.get("simulator_disputes", {})
@@ -411,8 +510,13 @@ class InMemoryStore:
             return
 
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        merchants = deepcopy(self._merchants)
+        for merchant in merchants.values():
+            for key in _MERCHANT_CREDENTIAL_KEYS:
+                merchant.pop(key, None)
         payload = {
-            "merchants": self._merchants,
+            "merchants": merchants,
+            "orders": self._orders,
             "disputes": self._disputes,
             "provider_events": self._provider_events,
             "simulator_disputes": self._simulator_disputes,

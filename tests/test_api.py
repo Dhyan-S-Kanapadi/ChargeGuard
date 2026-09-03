@@ -93,6 +93,21 @@ def test_api_key_is_required(monkeypatch) -> None:
     assert authenticated_response.status_code == 200
 
 
+def test_merchants_can_be_listed_for_workspace_selection(client: TestClient) -> None:
+    second = {**_merchant_payload(), "merchant_id": "merchant_api_002", "name": "Zulu Store"}
+    first = {**_merchant_payload(), "merchant_id": "merchant_api_001", "name": "Alpha Store"}
+    assert client.post("/merchants", json=second).status_code == 201
+    assert client.post("/merchants", json=first).status_code == 201
+
+    response = client.get("/merchants")
+
+    assert response.status_code == 200
+    assert [merchant["merchant_id"] for merchant in response.json()] == [
+        "merchant_api_001",
+        "merchant_api_002",
+    ]
+
+
 def test_health_reports_model_and_stub_mode(tmp_path, monkeypatch) -> None:
     model_path = tmp_path / "model.pkl"
     train_baseline_model(output_path=model_path, count=200, seed=42)

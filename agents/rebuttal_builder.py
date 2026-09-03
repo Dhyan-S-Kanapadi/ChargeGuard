@@ -36,6 +36,7 @@ def _evidence_status(state: ChargebackState) -> dict[str, bool]:
         "consortium": bool(state.get("consortium")),
         "delivery_photo": bool(state.get("delivery_photo")),
         "order_timeline": bool(state.get("order_timeline")),
+        "purchase_history": bool((state.get("ce3_qualification") or {}).get("qualifies")),
     }
 
 
@@ -149,6 +150,20 @@ def _load_template(state: ChargebackState) -> str:
 
 def _build_rebuttal_packet(state: ChargebackState) -> dict[str, Any]:
     playbook = _load_playbook(state)
+    ce3 = state.get("ce3_qualification") or {}
+    ce3_rows = []
+    if (
+        state.get("card_network") == "VISA"
+        and state.get("reason_code") == "10.4"
+        and ce3.get("qualifies")
+    ):
+        ce3_rows = [
+            {
+                "prior_transaction_ref": reference,
+                "matched_elements": list(ce3.get("matched_elements", [])),
+            }
+            for reference in ce3.get("prior_transaction_refs", [])
+        ]
     packet = {
         "chargeback_id": state["chargeback_id"],
         "merchant": state["merchant_profile"]["name"],
@@ -169,6 +184,7 @@ def _build_rebuttal_packet(state: ChargebackState) -> dict[str, Any]:
         "evidence_priority": playbook["evidence_priority"],
         "strongest_evidence": _strongest_evidence(state),
         "sections": _rebuttal_sections(state),
+        "ce3_qualified_transaction_data": ce3_rows,
         "narrative_generated": False,
         "evidence": {
             "transaction": state.get("transaction"),
@@ -237,7 +253,7 @@ def rebuttal_builder_agent(state: ChargebackState) -> ChargebackState:
         state["rebuttal_document_path"] = None
         state["rebuttal_build_error"] = "unsupported_card_network"
         return state
-    if rebuttal_narrative_enabled():
+    if rebuttal_narrative_enabled() and not packet["ce3_qualified_transaction_data"]:
         try:
             narrative = generate_rebuttal_narrative(packet)
             if state.get("quality_rejection_reason") == "prohibited_language_used":

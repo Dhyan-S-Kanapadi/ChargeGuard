@@ -25,7 +25,8 @@ When a chargeback webhook is received:
 Implemented:
 
 - FastAPI application entrypoint and health check
-- Merchant registration and retrieval endpoints
+- Merchant registration, listing, and retrieval endpoints
+- React and TypeScript operator dashboard served at `/dashboard/`
 - Chargeback webhook endpoint
 - In-memory dispute store for local development, with optional JSON persistence
 - LangGraph workflow with all core nodes wired
@@ -58,17 +59,18 @@ Not yet production-ready:
 ## Tech Stack
 
 - Python 3.11
+- Node.js 22 (frontend build and development)
 - FastAPI
 - LangGraph
 - Anthropic Claude API for deterministic language and vision tasks
 - LangSmith tracing hooks
-- Neo4j integration layer
 - ReportLab for PDF generation
 - scikit-learn baseline ML model
-- XGBoost dependency included for future model upgrade
 - httpx for provider integrations
 - pytest and pytest-asyncio
-- Docker Compose for local Neo4j
+- React, TypeScript, Vite, TanStack Query, Zod, Recharts, and Lucide
+- Vitest, React Testing Library, MSW, and Playwright
+- Docker Compose for the single ChargeGuard API service
 
 ## Repository Layout
 
@@ -158,14 +160,18 @@ ChargeGuard has four additive LLM call sites: delivery photo verification, case 
 ### Prerequisites
 
 - Python 3.11
+- Node.js 22
 - Poetry
-- Docker, optional for Neo4j
+- Docker, optional
 - Provider sandbox credentials, optional
 
 ### Install
 
 ```bash
 poetry install
+cd frontend
+npm ci
+cd ..
 ```
 
 ### Configure Environment
@@ -201,20 +207,40 @@ poetry run python -m ml.train
 ### Run The API
 
 ```bash
-poetry run uvicorn main:app --reload --port 8001
+poetry run uvicorn main:app --reload --port 8000
 ```
 
 Health check:
 
 ```bash
-curl http://127.0.0.1:8001/health
+curl http://127.0.0.1:8000/health
 ```
 
 Expected response:
 
 ```json
-{"status":"ok"}
+{"status":"ok","model_loaded":true,"stub_mode":true}
 ```
+
+### Run The Frontend
+
+Run FastAPI on port 8000, then start Vite in a second terminal:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Vite proxies ChargeGuard API paths to `http://127.0.0.1:8000`. Enter the API origin and a local `API_KEY` on the connection screen. The key stays in memory by default; the explicit tab-only option uses `sessionStorage`, never `localStorage`.
+
+Build the production dashboard with:
+
+```bash
+cd frontend
+npm run build
+```
+
+FastAPI serves `frontend/dist` at `/dashboard/` when present and falls back to the legacy `static/` dashboard when the React build is absent. Hash routing keeps dashboard routes reliable beneath the base path.
 
 ## Demo
 
@@ -262,6 +288,7 @@ These checks confirm that the system is internally consistent and behaves sensib
 
 ```bash
 curl -X POST http://127.0.0.1:8001/merchants \
+  -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "merchant_id": "merchant_demo",
@@ -280,6 +307,7 @@ Use a future `filing_deadline`.
 
 ```bash
 curl -X POST http://127.0.0.1:8001/webhook/chargeback \
+  -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "chargeback_id": "cb_demo_001",
@@ -298,19 +326,20 @@ curl -X POST http://127.0.0.1:8001/webhook/chargeback \
 ### List Disputes
 
 ```bash
-curl http://127.0.0.1:8001/disputes
+curl http://127.0.0.1:8001/disputes -H "X-API-Key: $API_KEY"
 ```
 
 ### Get A Dispute
 
 ```bash
-curl http://127.0.0.1:8001/disputes/cb_demo_001
+curl http://127.0.0.1:8001/disputes/cb_demo_001 -H "X-API-Key: $API_KEY"
 ```
 
 ### Record Final Outcome
 
 ```bash
 curl -X POST http://127.0.0.1:8001/disputes/cb_demo_001/outcome \
+  -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "outcome": "WIN",
@@ -378,6 +407,21 @@ python -m pytest -q tests/test_graph.py
 python -m pytest -q tests/test_api.py
 python -m pytest -q tests/test_scoring.py
 ```
+
+Frontend checks:
+
+```bash
+cd frontend
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npx playwright test
+```
+
+## Dashboard Deployment
+
+The Dockerfile uses a Node 22 build stage and `npm ci` to compile the dashboard, then copies only `frontend/dist` into the Python 3.11 runtime image. No API key or provider secret is a frontend build argument. The container respects `PORT`, so the same image is compatible with Render's Docker runtime. Configure secrets only as server-side environment variables and keep one application process while using the synchronized JSON store.
 
 ## Development Notes
 

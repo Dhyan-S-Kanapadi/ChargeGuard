@@ -119,6 +119,32 @@ def build_rebuttal_pdf(
         story.append(Paragraph(_text(section.get("body")), styles["BodyText"]))
         story.append(Spacer(1, 4 * mm))
 
+    ce3_rows = packet.get("ce3_qualified_transaction_data", [])
+    if ce3_rows:
+        story.append(Paragraph("Visa CE3.0 Qualified Transaction Data", styles["SectionTitle"]))
+        data = [["Prior transaction reference", "Matching qualified elements"]]
+        data.extend(
+            [
+                _text(row.get("prior_transaction_ref")),
+                _text(", ".join(row.get("matched_elements", []))),
+            ]
+            for row in ce3_rows
+        )
+        ce3_table = Table(data, colWidths=[65 * mm, 100 * mm], repeatRows=1)
+        ce3_table.setStyle(
+            TableStyle(
+                [
+                    ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
+                    ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 9),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#DCE5EB")),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#AAB4BD")),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("PADDING", (0, 0), (-1, -1), 6),
+                ]
+            )
+        )
+        story.extend([ce3_table, Spacer(1, 4 * mm)])
+
     story.append(Paragraph("Evidence index", styles["SectionTitle"]))
     evidence_rows = [["Evidence type", "Included"]]
     for name in packet.get("evidence_priority", packet.get("evidence_status", {})):

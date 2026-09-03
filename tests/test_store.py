@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from api.store import InMemoryStore
-from core.state import ChargebackState, MerchantProfile
+from core.state import ChargebackState, MerchantProfile, OrderRecord
 
 
 def _merchant() -> MerchantProfile:
@@ -95,3 +95,57 @@ def test_store_clear_persists_empty_state(tmp_path) -> None:
     reloaded = InMemoryStore(path=store_path)
     assert reloaded.get_merchant("merchant_store_001") is None
     assert reloaded.list_disputes() == []
+
+
+def test_store_never_writes_storefront_credentials_to_json(tmp_path) -> None:
+    store_path = tmp_path / "chargeguard_store.json"
+    local = InMemoryStore(path=store_path)
+    merchant = _merchant()
+    merchant.update(
+        {
+            "store_url": "https://shop.example",
+            "storefront_platform": "shopify",
+            "shopify_admin_api_token": "shpat_must_not_reach_disk",
+            "platform_credential_verified": True,
+        }
+    )
+
+    assert local.create_merchant(merchant) is True
+
+    assert "shpat_must_not_reach_disk" not in store_path.read_text(encoding="utf-8")
+    reloaded = InMemoryStore(path=store_path).get_merchant("merchant_store_001")
+    assert reloaded is not None
+    assert reloaded["platform_credential_verified"] is False
+    assert reloaded["platform_credential_verification_reason"] == "platform_credential_reverification_required"
+
+
+def test_store_marks_orders_disputed_before_or_after_order_ingestion() -> None:
+    local = InMemoryStore()
+    assert local.create_merchant(_merchant())
+
+    def order(order_id: str) -> OrderRecord:
+        return {
+            "order_id": order_id,
+            "merchant_id": "merchant_store_001",
+            "customer_email": "buyer@example.com",
+            "customer_ip": "203.0.113.10",
+            "user_agent": "Browser",
+            "shipping_address": "1 Main Street",
+            "order_date": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "is_disputed": False,
+            "is_fraud_flagged": False,
+        }
+
+    local.upsert_order(order("before"))
+    before_state = _state()
+    before_state["chargeback_id"] = "cb_before"
+    before_state["order_id"] = "before"
+    assert local.create_dispute(before_state)
+    assert local.get_order("merchant_store_001", "before")["is_disputed"] is True
+
+    after_state = _state()
+    after_state["chargeback_id"] = "cb_after"
+    after_state["order_id"] = "after"
+    assert local.create_dispute(after_state)
+    local.upsert_order(order("after"))
+    assert local.get_order("merchant_store_001", "after")["is_disputed"] is True

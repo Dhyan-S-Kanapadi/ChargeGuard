@@ -1,3 +1,11 @@
+FROM node:22-slim AS frontend-build
+
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -13,6 +21,7 @@ COPY pyproject.toml poetry.lock ./
 RUN poetry install --only main --no-root
 
 COPY . ./
+COPY --from=frontend-build /frontend/dist ./frontend/dist
 RUN python -m ml.train
 
 EXPOSE 8000

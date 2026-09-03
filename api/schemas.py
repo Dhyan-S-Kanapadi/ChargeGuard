@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import re
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from integrations.connector_config import CONNECTOR_REF_PATTERN
 
@@ -27,6 +28,41 @@ class MerchantCreate(BaseModel):
         Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"],
         Annotated[int, Field(ge=0)],
     ] = Field(default_factory=dict)
+    store_url: str | None = Field(default=None, min_length=1, max_length=2048)
+    storefront_platform: Literal["shopify", "woocommerce", "custom", "unknown"] = "unknown"
+    shopify_admin_api_token: str | None = Field(default=None, min_length=1, max_length=500)
+    woocommerce_api_key: str | None = Field(default=None, min_length=1, max_length=500)
+    woocommerce_api_secret: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_platform_credentials(self):
+        if self.shopify_admin_api_token and (self.woocommerce_api_key or self.woocommerce_api_secret):
+            raise ValueError("Submit credentials for only one storefront platform at a time.")
+        if bool(self.woocommerce_api_key) != bool(self.woocommerce_api_secret):
+            raise ValueError("WooCommerce API key and secret must be submitted together.")
+        if (self.shopify_admin_api_token or self.woocommerce_api_key) and not self.store_url:
+            raise ValueError("store_url is required when platform credentials are submitted.")
+        return self
+
+
+class MerchantUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    vertical: Literal["ecommerce", "food_delivery", "quick_commerce"] | None = None
+    store_url: str | None = Field(default=None, min_length=1, max_length=2048)
+    storefront_platform: Literal["shopify", "woocommerce", "custom", "unknown"] | None = None
+    shopify_admin_api_token: str | None = Field(default=None, min_length=1, max_length=500)
+    woocommerce_api_key: str | None = Field(default=None, min_length=1, max_length=500)
+    woocommerce_api_secret: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_platform_credentials(self):
+        if self.shopify_admin_api_token and (self.woocommerce_api_key or self.woocommerce_api_secret):
+            raise ValueError("Submit credentials for only one storefront platform at a time.")
+        if bool(self.woocommerce_api_key) != bool(self.woocommerce_api_secret):
+            raise ValueError("WooCommerce API key and secret must be submitted together.")
+        return self
 
 
 class MerchantDisputeRatio(BaseModel):
@@ -53,6 +89,80 @@ class MerchantResponse(BaseModel):
     chargeback_history_count: int
     transaction_volume_30d_by_network: dict[str, int]
     merchant_dispute_ratio: dict[str, MerchantDisputeRatio]
+    store_url: str | None = None
+    storefront_platform: Literal["shopify", "woocommerce", "custom", "unknown"]
+    platform_credential_verified: bool
+    platform_credential_verified_at: datetime | None = None
+    platform_credential_verification_reason: str | None = None
+
+
+class PlatformSuggestionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    store_url: str = Field(min_length=1, max_length=2048)
+
+
+class PlatformSuggestionResponse(BaseModel):
+    suggestion: Literal["shopify", "woocommerce", "custom", "unknown"]
+
+
+class OrderIngestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    merchant_id: str = Field(min_length=1, max_length=100)
+    order_id: str = Field(min_length=1, max_length=200)
+    customer_email: str = Field(min_length=3, max_length=320)
+    customer_ip: str = Field(min_length=1, max_length=64)
+    user_agent: str = Field(min_length=1, max_length=2000)
+    shipping_address: str | dict[str, Any]
+    order_date: datetime
+
+    @field_validator("customer_email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        normalized = value.strip().casefold()
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized):
+            raise ValueError("customer_email must be a valid email address")
+        return normalized
+
+    @field_validator("customer_ip")
+    @classmethod
+    def validate_ip(cls, value: str) -> str:
+        from ipaddress import ip_address
+
+        try:
+            return str(ip_address(value.strip()))
+        except ValueError as exc:
+            raise ValueError("customer_ip must be a valid IPv4 or IPv6 address") from exc
+
+    @field_validator("order_date")
+    @classmethod
+    def normalize_order_date(cls, value: datetime) -> datetime:
+        normalized = value.replace(tzinfo=value.tzinfo or timezone.utc).astimezone(timezone.utc)
+        if normalized > datetime.now(timezone.utc) + timedelta(minutes=5):
+            raise ValueError("order_date must not be in the future")
+        return normalized
+
+    @field_validator("shipping_address")
+    @classmethod
+    def validate_shipping_address(cls, value: str | dict[str, Any]):
+        if isinstance(value, str) and not value.strip():
+            raise ValueError("shipping_address must not be empty")
+        if isinstance(value, dict) and not value:
+            raise ValueError("shipping_address must not be empty")
+        return value
+
+
+class OrderIngestResponse(BaseModel):
+    status: Literal["created", "updated"]
+    merchant_id: str
+    order_id: str
+
+
+class ShopifySyncResponse(BaseModel):
+    merchant_id: str
+    created: int
+    updated: int
+    failed_pages: int
 
 
 class ChargebackWebhookPayload(BaseModel):

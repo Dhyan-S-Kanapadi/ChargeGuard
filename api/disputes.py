@@ -39,6 +39,11 @@ _EVIDENCE_KEYS = (
     "order_timeline",
 )
 _TRANSACTION_PII_KEYS = ("customer_email", "ip_address", "device_id")
+_MERCHANT_SECRET_KEYS = (
+    "shopify_admin_api_token",
+    "woocommerce_api_key",
+    "woocommerce_api_secret",
+)
 
 
 def _redact_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -52,6 +57,13 @@ def _redact_state(state: dict[str, Any]) -> dict[str, Any]:
     if isinstance(transaction, dict):
         for key in _TRANSACTION_PII_KEYS:
             transaction.pop(key, None)
+
+    merchant = redacted.get("merchant_profile")
+    if isinstance(merchant, dict):
+        for key in _MERCHANT_SECRET_KEYS:
+            merchant.pop(key, None)
+    redacted.pop("disputed_order_ip", None)
+    redacted.pop("disputed_order_user_agent", None)
 
     return redacted
 

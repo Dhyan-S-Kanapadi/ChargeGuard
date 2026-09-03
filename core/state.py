@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal, NotRequired, Optional, TypedDict
+from typing import Any, Literal, NotRequired, Optional, TypedDict
 
 from core.shipping_status import ShippingStatusCategory
 
@@ -17,6 +17,33 @@ class MerchantProfile(TypedDict):
     average_order_value: float
     chargeback_history_count: int
     transaction_volume_30d_by_network: NotRequired[dict[str, int]]
+    store_url: NotRequired[str | None]
+    storefront_platform: NotRequired[Literal["shopify", "woocommerce", "custom", "unknown"]]
+    shopify_admin_api_token: NotRequired[str | None]
+    woocommerce_api_key: NotRequired[str | None]
+    woocommerce_api_secret: NotRequired[str | None]
+    platform_credential_verified: NotRequired[bool]
+    platform_credential_verified_at: NotRequired[datetime | None]
+    platform_credential_verification_reason: NotRequired[str | None]
+
+
+class OrderRecord(TypedDict):
+    order_id: str
+    merchant_id: str
+    customer_email: str
+    customer_ip: str
+    user_agent: str
+    shipping_address: str | dict[str, Any]
+    order_date: datetime
+    is_disputed: bool
+    is_fraud_flagged: bool
+
+
+class CE3Qualification(TypedDict):
+    qualifies: bool
+    matched_elements: list[str]
+    prior_transaction_refs: list[str]
+    reason: str
 
 
 class TransactionEvidence(TypedDict):
@@ -147,6 +174,10 @@ class ChargebackState(TypedDict):
     contradiction_summary: NotRequired[Optional[str]]
     human_review_summary: NotRequired[Optional[str]]
     compelling_evidence_3_0: NotRequired[dict]
+    ce3_qualification: NotRequired[CE3Qualification]
+    disputed_order_ip: NotRequired[str]
+    disputed_order_user_agent: NotRequired[str]
+    ce3_override_applied: NotRequired[bool]
     requires_human_review: NotRequired[bool]
     decision: Optional[Literal["FIGHT", "ACCEPT", "ESCALATE_DEGRADED"]]
     decision_reasoning: Optional[str]
