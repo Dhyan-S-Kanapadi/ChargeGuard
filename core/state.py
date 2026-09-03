@@ -52,6 +52,23 @@ class CE3Qualification(TypedDict):
     reason: str
 
 
+class ClassificationSuggestion(TypedDict):
+    suggestion_id: str
+    card_network: Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"]
+    recommended_reason_code: str | None
+    confidence: float
+    rationale: str
+    evidence_fields_used: list[str]
+    model: str
+    prompt_schema_version: str
+    created_at: datetime
+    requested_by_actor_id: str
+    status: Literal["pending", "approved", "rejected", "unavailable"]
+    unavailability_reason: NotRequired[str | None]
+    resolved_at: NotRequired[datetime]
+    resolved_by_actor_id: NotRequired[str]
+
+
 class TransactionEvidence(TypedDict):
     order_id: str
     payment_id: str
@@ -157,6 +174,7 @@ class ChargebackState(TypedDict):
     reason_mapping_version: NotRequired[str]
     reason_mapping_source: NotRequired[str]
     classification_audit: NotRequired[dict[str, Any]]
+    classification_suggestion: NotRequired[ClassificationSuggestion]
     classification_resume_scheduled: NotRequired[bool]
     provider_account_id: NotRequired[str]
     provider_respond_by: NotRequired[datetime]

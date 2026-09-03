@@ -87,6 +87,16 @@ Provider-native and network-native concepts must stay distinct:
 - Never translate a provider reason into a network reason by guessing.
 - UPI is `payment_rail=UPI`; it is not RuPay and does not imply a card network.
 
+For unmapped Razorpay card disputes, the optional reason-classification integration is
+human-in-the-loop only. Deterministic verified mappings remain authoritative and bypass the
+LLM. The protected suggestion endpoint supplies only bounded normalized provider facts and
+network-scoped playbook/template candidates. A stored recommendation cannot change the
+authoritative network reason or start the graph until an authenticated operator approves the
+exact pending suggestion through the existing atomic classification claim. Low-confidence,
+invalid, unavailable, or rejected suggestions leave the manual classification path intact.
+Never use this LLM path for card-network inference, order correlation, deadlines, scoring,
+financial state transitions, contest decisions, evidence generation, or submission.
+
 ## LangGraph Workflow
 
 The compiled graph is `core.graph.app`.
@@ -370,6 +380,7 @@ RAZORPAY_WEBHOOK_ENABLED=true
 RAZORPAY_RECOVER_PENDING_ON_STARTUP=true
 RAZORPAY_STARTUP_RECOVERY_LIMIT=25
 RAZORPAY_SIMULATOR_ENABLED=true
+REASON_CLASSIFICATION_ENABLED=false
 MODEL_PATH=./ml/artifacts/win_probability_model.pkl
 CHARGEGUARD_STORE_PATH=./data/chargeguard_store.json
 ```
@@ -384,6 +395,14 @@ RAZORPAY_SIMULATOR_ENABLED=false
 ```
 
 Provider-specific `*_USE_STUBS` values may be left blank to inherit `CHARGEGUARD_USE_STUBS`. For India-first Razorpay Test Mode validation, keep the global setting `true`, set only `RAZORPAY_USE_STUBS=false`, and leave unrelated providers stubbed until their credentials and test plans are ready.
+
+Optional assisted reason classification also requires `ANTHROPIC_API_KEY` when live,
+`REASON_CLASSIFICATION_ENABLED=true`, and may configure
+`REASON_CLASSIFICATION_MODEL`, `REASON_CLASSIFICATION_MIN_CONFIDENCE`, and
+`REASON_CLASSIFICATION_TIMEOUT_SECONDS`. `REASON_CLASSIFICATION_USE_STUBS` inherits the
+global stub setting when blank. Keep the feature disabled unless an authenticated operator
+will review every recommendation; manual classification remains available when it is disabled
+or unavailable.
 
 The webhook secret is separate from the API key secret:
 

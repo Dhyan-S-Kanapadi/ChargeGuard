@@ -186,11 +186,17 @@ class DisputeClassificationRequest(BaseModel):
     card_network: Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"]
     network_reason_code: str = Field(min_length=1, max_length=20)
     actor_id: str = Field(min_length=1, max_length=200)
+    suggestion_id: str | None = Field(default=None, min_length=1, max_length=100)
 
-    @field_validator("network_reason_code", "actor_id")
+    @field_validator("network_reason_code", "actor_id", "suggestion_id")
     @classmethod
-    def strip_classification_values(cls, value: str) -> str:
-        return value.strip()
+    def strip_classification_values(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("classification values must not be blank")
+        return stripped
 
 
 class DisputeClassificationResponse(BaseModel):
@@ -198,6 +204,44 @@ class DisputeClassificationResponse(BaseModel):
     status: Literal["scheduled"]
     card_network: str
     network_reason_code: str
+
+
+class ClassificationSuggestionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    actor_id: str = Field(min_length=1, max_length=200)
+
+    @field_validator("actor_id")
+    @classmethod
+    def strip_actor_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("actor_id must not be blank")
+        return stripped
+
+
+class ClassificationSuggestionRejectRequest(ClassificationSuggestionRequest):
+    suggestion_id: str = Field(min_length=1, max_length=100)
+
+    @field_validator("suggestion_id")
+    @classmethod
+    def strip_suggestion_id(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("suggestion_id must not be blank")
+        return stripped
+
+
+class ClassificationSuggestionResponse(BaseModel):
+    suggestion_id: str
+    card_network: str
+    recommended_reason_code: str | None
+    confidence: float
+    rationale: str
+    evidence_fields_used: list[str]
+    status: Literal["pending", "approved", "rejected", "unavailable"]
+    can_approve: bool
+    unavailability_reason: str | None = None
 
 
 class ShopifySyncResponse(BaseModel):

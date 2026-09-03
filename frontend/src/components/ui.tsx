@@ -6,10 +6,11 @@ export function Button({
   children,
   variant = "primary",
   loading = false,
+  className = "",
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "secondary" | "danger" | "ghost"; loading?: boolean }) {
   return (
-    <button className={`button button--${variant}`} disabled={loading || props.disabled} {...props}>
+    <button {...props} className={`button button--${variant} ${className}`.trim()} disabled={loading || props.disabled}>
       {loading ? <LoaderCircle aria-hidden="true" className="spin" size={16} /> : null}
       {children}
     </button>

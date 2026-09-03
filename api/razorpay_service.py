@@ -131,6 +131,43 @@ def _playbook_available(network: str | None, reason_code: str | None) -> bool:
     return reason_code in playbooks and template.is_file()
 
 
+def reason_classification_candidates(network: str) -> list[dict[str, str]]:
+    """Return the deterministic reason-code allowlist for one verified network."""
+    filename = {
+        "VISA": "visa_playbooks.json",
+        "MASTERCARD": "mastercard_playbooks.json",
+        "RUPAY": "rupay_playbooks.json",
+    }.get(network)
+    if filename is None:
+        return []
+    try:
+        playbooks = json.loads(
+            (PROJECT_ROOT / "documents" / "playbooks" / filename).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return []
+    if not isinstance(playbooks, dict):
+        return []
+    candidates: list[dict[str, str]] = []
+    for code, playbook in sorted(playbooks.items()):
+        if not isinstance(code, str) or not isinstance(playbook, dict):
+            continue
+        if not _playbook_available(network, code):
+            continue
+        arguments = playbook.get("key_arguments", [])
+        summary = "; ".join(
+            item.strip() for item in arguments if isinstance(item, str) and item.strip()
+        )[:500]
+        candidates.append(
+            {
+                "reason_code": code,
+                "description": str(playbook.get("name") or "")[:200],
+                "summary": summary,
+            }
+        )
+    return candidates
+
+
 def _manual_review_reasons(normalized: NormalizedRazorpayDispute) -> list[str]:
     reasons: list[str] = []
     if normalized.enrichment_degraded:
