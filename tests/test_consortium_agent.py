@@ -101,7 +101,8 @@ def test_consortium_agent_records_empty_evidence_on_collection_failure(monkeypat
     assert result["consortium"]["ethoca_match"] is False
     assert result["consortium"]["verifi_match"] is False
     assert result["consortium"]["raw"]["source"] == "consortium_agent_empty"
-    assert result["consortium"]["raw"]["error"] == "network intelligence unavailable"
+    assert result["consortium"]["raw"]["error"] == "consortium_provider_unavailable"
+    assert "consortium_provider_unavailable" in result["degraded_reasons"]
 
 
 def test_consortium_agent_keeps_ethoca_match_when_verifi_fails(monkeypatch) -> None:
@@ -130,5 +131,6 @@ def test_consortium_agent_keeps_ethoca_match_when_verifi_fails(monkeypatch) -> N
     assert result["consortium"]["verifi_match"] is False
     assert result["consortium"]["cross_merchant_fraud_history"] is True
     assert result["consortium"]["raw"]["response"]["source_errors"] == {
-        "verifi": "Verifi unavailable"
+        "verifi": "verifi_provider_unavailable"
     }
+    assert "verifi_provider_unavailable" in result["degraded_reasons"]

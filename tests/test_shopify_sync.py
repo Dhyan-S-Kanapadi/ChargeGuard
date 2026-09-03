@@ -30,6 +30,14 @@ def _order(order_id: int) -> dict:
         "created_at": "2025-01-01T10:00:00Z",
         "client_details": {"browser_ip": "203.0.113.8", "user_agent": "Browser"},
         "shipping_address": {"address1": "1 Main Street"},
+        "name": f"#{order_id + 1000}",
+        "fulfillments": [
+            {"id": order_id + 5000, "tracking_number": f"awb_{order_id}"}
+        ],
+        "note_attributes": [
+            {"name": "razorpay_payment_id", "value": f"pay_{order_id}"},
+            {"name": "razorpay_order_id", "value": f"order_rzp_{order_id}"},
+        ],
     }
 
 
@@ -81,6 +89,11 @@ def test_shopify_sync_handles_pagination_and_skips_one_bad_page() -> None:
 
     assert len(requests) == 3
     assert [order["order_id"] for order in saved] == ["1", "2"]
+    assert saved[0]["commerce_order_number"] == "#1001"
+    assert saved[0]["provider_payment_id"] == "pay_1"
+    assert saved[0]["provider_order_id"] == "order_rzp_1"
+    assert saved[0]["tracking_id"] == "awb_1"
+    assert saved[0]["fulfillment_id"] == "5001"
     assert result == {"created": 2, "updated": 0, "failed_pages": 1}
 
 

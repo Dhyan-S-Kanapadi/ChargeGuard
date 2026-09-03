@@ -18,6 +18,8 @@ def test_chargeback_graph_runs_from_start_to_end(tmp_path, monkeypatch) -> None:
     now = datetime.now(timezone.utc)
     state: ChargebackState = {
         "chargeback_id": "cb_test_001",
+        "order_id": "order_test_001",
+        "tracking_id": "tracking_test_001",
         "reason_code": "10.4",
         "card_network": "VISA",
         "dispute_amount": 2500.0,
@@ -90,6 +92,8 @@ def test_low_ev_graph_acceptance_does_not_record_training_outcome(
     now = datetime.now(timezone.utc)
     state: ChargebackState = {
         "chargeback_id": "cb_low_ev_001",
+        "order_id": "order_low_ev_001",
+        "tracking_id": "tracking_low_ev_001",
         "reason_code": "10.4",
         "card_network": "VISA",
         "dispute_amount": 10.0,
@@ -152,6 +156,8 @@ def test_device_collection_failure_escalates_to_human_review(tmp_path, monkeypat
     now = datetime.now(timezone.utc)
     state: ChargebackState = {
         "chargeback_id": "cb_device_failure_001",
+        "order_id": "order_device_failure_001",
+        "tracking_id": "tracking_device_failure_001",
         "reason_code": "10.4",
         "card_network": "VISA",
         "dispute_amount": 2_500.0,
@@ -197,7 +203,7 @@ def test_device_collection_failure_escalates_to_human_review(tmp_path, monkeypat
 
     assert result["device"] is None
     assert result["evidence_collection_degraded"] is True
-    assert result["degraded_reasons"] == ["device"]
+    assert result["degraded_reasons"] == ["device_provider_unavailable"]
     assert result["decision"] == "ESCALATE_DEGRADED"
     assert result["filing_confirmation"] == "human_review_required"
     assert result["final_outcome"] == "PENDING"
@@ -228,6 +234,8 @@ def test_overdue_case_skips_slow_evidence_and_scores_with_partial_evidence(
     now = datetime.now(timezone.utc)
     state: ChargebackState = {
         "chargeback_id": "cb_overdue_001",
+        "order_id": "order_overdue_001",
+        "tracking_id": "tracking_overdue_001",
         "reason_code": "10.4",
         "card_network": "VISA",
         "dispute_amount": 2_500.0,

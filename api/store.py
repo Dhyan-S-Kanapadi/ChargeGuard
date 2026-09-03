@@ -35,6 +35,10 @@ _MERCHANT_CREDENTIAL_KEYS = (
 )
 
 
+class OrderIdentifierConflictError(ValueError):
+    """Raised when one merchant maps a provider identifier to two orders."""
+
+
 def _provider_event_claim_timeout_seconds() -> int:
     try:
         return max(1, int(os.getenv("PROVIDER_EVENT_CLAIM_TIMEOUT_SECONDS", "300")))
@@ -142,9 +146,11 @@ class InMemoryStore:
         """Create or replace one merchant-scoped order; returns True when created."""
         key = self._order_key(order["merchant_id"], order["order_id"])
         with self._lock:
+            self._validate_order_identifiers(order, key)
             created = key not in self._orders
-            value = deepcopy(order)
             existing = self._orders.get(key)
+            value = deepcopy(existing) if existing is not None else {}
+            value.update(deepcopy(order))
             if existing is not None:
                 value["is_disputed"] = existing["is_disputed"]
                 value["is_fraud_flagged"] = existing["is_fraud_flagged"]
@@ -154,10 +160,80 @@ class InMemoryStore:
             self._save()
             return created
 
+    def _validate_order_identifiers(self, order: OrderRecord, key: str) -> None:
+        merchant_id = order["merchant_id"]
+        for field in ("provider_payment_id", "provider_order_id"):
+            identifier = order.get(field)
+            if not identifier:
+                continue
+            for existing_key, existing in self._orders.items():
+                if (
+                    existing_key != key
+                    and existing["merchant_id"] == merchant_id
+                    and existing.get(field) == identifier
+                ):
+                    raise OrderIdentifierConflictError(
+                        f"{field} is already mapped to another order for this merchant."
+                    )
+
     def get_order(self, merchant_id: str, order_id: str) -> OrderRecord | None:
         with self._lock:
             order = self._orders.get(self._order_key(merchant_id, order_id))
             return deepcopy(order) if order else None
+
+    def mark_order_disputed(self, merchant_id: str, order_id: str) -> None:
+        with self._lock:
+            order = self._orders.get(self._order_key(merchant_id, order_id))
+            if order is not None and not order["is_disputed"]:
+                order["is_disputed"] = True
+                self._save()
+
+    def get_order_by_provider_payment_id(
+        self,
+        merchant_id: str,
+        provider_payment_id: str,
+    ) -> OrderRecord | None:
+        return self._get_order_by_identifier(
+            merchant_id,
+            "provider_payment_id",
+            provider_payment_id,
+        )
+
+    def get_order_by_provider_order_id(
+        self,
+        merchant_id: str,
+        provider_order_id: str,
+    ) -> OrderRecord | None:
+        return self._get_order_by_identifier(
+            merchant_id,
+            "provider_order_id",
+            provider_order_id,
+        )
+
+    def get_order_by_commerce_order_number(
+        self,
+        merchant_id: str,
+        commerce_order_number: str,
+    ) -> OrderRecord | None:
+        return self._get_order_by_identifier(
+            merchant_id,
+            "commerce_order_number",
+            commerce_order_number,
+        )
+
+    def _get_order_by_identifier(
+        self,
+        merchant_id: str,
+        field: str,
+        value: str,
+    ) -> OrderRecord | None:
+        with self._lock:
+            matches = [
+                item
+                for item in self._orders.values()
+                if item["merchant_id"] == merchant_id and item.get(field) == value
+            ]
+            return deepcopy(matches[0]) if len(matches) == 1 else None
 
     def query_orders(
         self,
@@ -186,7 +262,10 @@ class InMemoryStore:
 
     def _order_has_dispute(self, merchant_id: str, order_id: str) -> bool:
         return any(
-            record.get("state", {}).get("order_id") == order_id
+            (
+                record.get("state", {}).get("commerce_order_id") == order_id
+                or record.get("state", {}).get("order_id") == order_id
+            )
             and record.get("state", {}).get("merchant_profile", {}).get("merchant_id")
             == merchant_id
             for record in self._disputes.values()
@@ -207,13 +286,87 @@ class InMemoryStore:
                 "updated_at": now,
             }
             merchant_id = state.get("merchant_profile", {}).get("merchant_id")
-            order_id = state.get("order_id")
+            order_id = state.get("commerce_order_id") or state.get("order_id")
             if merchant_id and order_id:
                 order = self._orders.get(self._order_key(merchant_id, order_id))
                 if order is not None:
                     order["is_disputed"] = True
             self._save()
             return True
+
+    def claim_dispute_classification(
+        self,
+        chargeback_id: str,
+        *,
+        card_network: str,
+        network_reason_code: str,
+        actor_id: str,
+    ) -> ChargebackState | None:
+        """Atomically persist a valid operator classification and claim one graph run."""
+        with self._lock:
+            record = self._disputes.get(chargeback_id)
+            if record is None:
+                raise KeyError(chargeback_id)
+            state = record["state"]
+            if state.get("classification_resume_scheduled"):
+                return None
+            if record["status"] != "completed" or state.get("provider") != "razorpay":
+                return None
+            reasons = state.get("degraded_reasons", [])
+            if (
+                state.get("decision") != "ESCALATE_DEGRADED"
+                or state.get("provider_event") != "payment.dispute.created"
+                or not {
+                    "card_network_unavailable",
+                    "network_reason_code_unavailable",
+                    "network_playbook_unavailable",
+                }.intersection(reasons)
+            ):
+                return None
+
+            resolved = {
+                "card_network_unavailable",
+                "network_reason_code_unavailable",
+                "network_playbook_unavailable",
+            }
+            remaining = [
+                reason for reason in reasons if reason not in resolved
+            ]
+            if remaining:
+                raise ValueError(
+                    "Dispute has unresolved manual-review requirements: "
+                    + ", ".join(remaining)
+                )
+
+            now = datetime.now(timezone.utc)
+            state["card_network"] = card_network
+            state["network_reason_code"] = network_reason_code
+            state["reason_code"] = network_reason_code
+            state["reason_mapping_version"] = "operator-v1"
+            state["reason_mapping_source"] = "manual_classification"
+            state["classification_audit"] = {
+                "actor_id": actor_id,
+                "classified_at": now,
+                "source": "authenticated_operator",
+                "card_network": card_network,
+                "network_reason_code": network_reason_code,
+            }
+            state["classification_resume_scheduled"] = True
+            state["degraded_reasons"] = []
+            state["evidence_collection_degraded"] = False
+            state["requires_human_review"] = False
+            state["decision"] = None
+            state["decision_reasoning"] = None
+            state["filing_confirmation"] = None
+            state["final_outcome"] = None
+            state["outcome_reason"] = None
+            state["human_review_summary"] = None
+            record["status"] = "received"
+            record["state"] = state
+            record["error"] = None
+            record["updated_at"] = now
+            self._save()
+            return deepcopy(state)
 
     def update_dispute(
         self,

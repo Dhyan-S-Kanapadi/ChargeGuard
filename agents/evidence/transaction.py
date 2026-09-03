@@ -217,7 +217,8 @@ def _empty_transaction_evidence(
     error: str | None = None,
 ) -> TransactionEvidence:
     return {
-        "order_id": state.get("order_id", ""),
+        "order_id": state.get("provider_order_id") or state.get("order_id", ""),
+        "provider_order_id": state.get("provider_order_id", ""),
         "payment_id": state.get("payment_id", ""),
         "amount": 0.0,
         "currency": state.get("currency", "INR"),
@@ -239,7 +240,7 @@ def _empty_transaction_evidence(
 
 def _stub_payment_response(state: ChargebackState) -> dict[str, Any]:
     payment_id = state.get("payment_id") or f"pay_{state['chargeback_id']}"
-    order_id = state.get("order_id") or f"order_{state['chargeback_id']}"
+    order_id = state.get("provider_order_id") or state.get("order_id") or f"order_{state['chargeback_id']}"
 
     return {
         "id": payment_id,
@@ -266,7 +267,7 @@ def _stub_payment_response(state: ChargebackState) -> dict[str, Any]:
 
 def _stub_order_response(state: ChargebackState) -> dict[str, Any]:
     return {
-        "id": state.get("order_id") or f"order_{state['chargeback_id']}",
+        "id": state.get("provider_order_id") or state.get("order_id") or f"order_{state['chargeback_id']}",
         "receipt": f"receipt_{state['chargeback_id']}",
         "status": "paid",
         "customer": {
@@ -291,8 +292,16 @@ def _build_transaction_evidence(
     customer = _extract_customer(order, payment)
     amount = _minor_units_to_amount(payment.get("amount"), state["dispute_amount"])
 
-    return {
-        "order_id": str(payment.get("order_id") or order.get("id") or state.get("order_id", "")),
+    provider_order_id = str(
+        payment.get("order_id")
+        or order.get("id")
+        or state.get("provider_order_id")
+        or ""
+    )
+    commerce_reference, commerce_number = _explicit_commerce_references(payment, order)
+    evidence: TransactionEvidence = {
+        "order_id": provider_order_id,
+        "provider_order_id": provider_order_id,
         "payment_id": str(payment.get("id") or state.get("payment_id", "")),
         "amount": amount,
         "currency": str(payment.get("currency") or state["currency"]),
@@ -316,16 +325,46 @@ def _build_transaction_evidence(
             "order": order,
         },
     }
+    if commerce_reference:
+        evidence["commerce_order_reference"] = commerce_reference
+    if commerce_number:
+        evidence["commerce_order_number_reference"] = commerce_number
+    return evidence
+
+
+def _explicit_commerce_references(
+    payment: dict[str, Any],
+    order: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    id_keys = ("commerce_order_id", "shopify_order_id")
+    number_keys = ("commerce_order_number", "shopify_order_number")
+    for source in (order.get("notes"), payment.get("notes")):
+        if not isinstance(source, dict):
+            continue
+        commerce_id = next(
+            (str(source[key]).strip() for key in id_keys if source.get(key)),
+            None,
+        )
+        commerce_number = next(
+            (str(source[key]).strip() for key in number_keys if source.get(key)),
+            None,
+        )
+        if commerce_id or commerce_number:
+            return commerce_id, commerce_number
+    receipt = order.get("receipt")
+    return (str(receipt).strip(), None) if receipt else (None, None)
 
 
 def _collect_razorpay(state: ChargebackState) -> tuple[dict[str, Any], dict[str, Any]]:
     payment_id = state.get("payment_id")
-    order_id = state.get("order_id")
-    if not payment_id or not order_id:
-        raise ValueError("Razorpay collection requires payment_id and order_id")
+    if not payment_id:
+        raise ValueError("Razorpay collection requires payment_id")
 
     client = RazorpayClient.from_env()
-    return client.get_payment(payment_id), client.get_order(order_id)
+    payment = client.get_payment(payment_id)
+    provider_order_id = payment.get("order_id") or state.get("provider_order_id")
+    order = client.get_order(str(provider_order_id)) if provider_order_id else {}
+    return payment, order
 
 
 def _collect_stripe(state: ChargebackState) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -399,20 +438,33 @@ def transaction_agent(state: ChargebackState) -> ChargebackState:
             order,
             source=source,
         )
+        provider_order_id = state["transaction"].get("provider_order_id")
+        if provider_order_id:
+            state["provider_order_id"] = provider_order_id
         state["compelling_evidence_3_0"] = _evaluate_compelling_evidence_3_0(state)
-    except (RazorpayConfigError, StripeConfigError) as exc:
+    except (RazorpayConfigError, StripeConfigError):
         provider = _payment_provider(state)
-        logger.warning("%s credentials are unavailable: %s", provider, exc)
-        state["transaction"] = _empty_transaction_evidence(state, error=str(exc))
+        logger.warning("%s credentials are unavailable", provider)
+        state["transaction"] = _empty_transaction_evidence(
+            state,
+            error=f"{provider}_credentials_missing",
+        )
         state["compelling_evidence_3_0"] = _evaluate_compelling_evidence_3_0(state)
         state["evidence_collection_degraded"] = True
         degraded_reasons = state.setdefault("degraded_reasons", [])
         reason = f"{provider}_credentials_missing"
         if reason not in degraded_reasons:
             degraded_reasons.append(reason)
-    except Exception as exc:
-        logger.exception("Transaction evidence collection failed")
-        state["transaction"] = _empty_transaction_evidence(state, error=str(exc))
+    except Exception:
+        logger.error("Transaction evidence collection failed")
+        state["transaction"] = _empty_transaction_evidence(
+            state,
+            error="transaction_provider_unavailable",
+        )
         state["compelling_evidence_3_0"] = _evaluate_compelling_evidence_3_0(state)
+        state["evidence_collection_degraded"] = True
+        degraded_reasons = state.setdefault("degraded_reasons", [])
+        if "transaction_provider_unavailable" not in degraded_reasons:
+            degraded_reasons.append("transaction_provider_unavailable")
 
     return state

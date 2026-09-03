@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from api.auth import require_api_key
 from api.schemas import OrderIngestRequest, OrderIngestResponse
-from api.store import store
+from api.store import OrderIdentifierConflictError, store
 from core.state import OrderRecord
 
 
@@ -18,11 +18,14 @@ def ingest_order(payload: OrderIngestRequest) -> OrderIngestResponse:
     if store.get_merchant(payload.merchant_id) is None:
         raise HTTPException(status_code=404, detail="Merchant not found.")
     order: OrderRecord = {
-        **payload.model_dump(),
+        **payload.model_dump(exclude_none=True),
         "is_disputed": False,
         "is_fraud_flagged": False,
     }
-    created = store.upsert_order(order)
+    try:
+        created = store.upsert_order(order)
+    except OrderIdentifierConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return OrderIngestResponse(
         status="created" if created else "updated",
         merchant_id=payload.merchant_id,

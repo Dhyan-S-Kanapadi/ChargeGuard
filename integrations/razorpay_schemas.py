@@ -77,12 +77,15 @@ class NormalizedRazorpayDispute(BaseModel):
     chargeback_id: str
     payment_id: str
     order_id: str | None = None
+    provider_order_id: str | None = None
     dispute_amount: Decimal
     currency: str
     filing_deadline: datetime | None = None
     deadline_overdue: bool
     provider_reason_code: str
     network_reason_code: str | None = None
+    reason_mapping_version: str | None = None
+    reason_mapping_source: str | None = None
     payment_rail: str | None = None
     card_network: Literal["VISA", "MASTERCARD", "RUPAY", "AMEX"] | None = None
     provider_status: str

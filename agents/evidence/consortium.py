@@ -135,15 +135,16 @@ def _collect_consortium_data(state: ChargebackState) -> dict[str, Any]:
         try:
             ethoca = EthocaClient.from_env().search_alerts(identifiers)
             completed += 1
-        except EthocaConfigError as exc:
-            logger.warning("Ethoca credentials are unavailable: %s", exc)
+        except EthocaConfigError:
+            logger.warning("Ethoca credentials are unavailable")
             ethoca = {}
-            errors["ethoca"] = str(exc)
+            errors["ethoca"] = "ethoca_credentials_missing"
             degraded_reasons.append("ethoca_credentials_missing")
-        except Exception as exc:
-            logger.warning("Ethoca lookup failed: %s", exc)
+        except Exception:
+            logger.warning("Ethoca lookup failed")
             ethoca = {}
-            errors["ethoca"] = str(exc)
+            errors["ethoca"] = "ethoca_provider_unavailable"
+            degraded_reasons.append("ethoca_provider_unavailable")
 
     if _consortium_use_stubs("verifi"):
         verifi = {"match": False}
@@ -152,15 +153,16 @@ def _collect_consortium_data(state: ChargebackState) -> dict[str, Any]:
         try:
             verifi = VerifiClient.from_env().search_alerts(identifiers)
             completed += 1
-        except VerifiConfigError as exc:
-            logger.warning("Verifi credentials are unavailable: %s", exc)
+        except VerifiConfigError:
+            logger.warning("Verifi credentials are unavailable")
             verifi = {}
-            errors["verifi"] = str(exc)
+            errors["verifi"] = "verifi_credentials_missing"
             degraded_reasons.append("verifi_credentials_missing")
-        except Exception as exc:
-            logger.warning("Verifi lookup failed: %s", exc)
+        except Exception:
+            logger.warning("Verifi lookup failed")
             verifi = {}
-            errors["verifi"] = str(exc)
+            errors["verifi"] = "verifi_provider_unavailable"
+            degraded_reasons.append("verifi_provider_unavailable")
 
     return {
         "lookup_complete": completed == 2,
@@ -182,7 +184,14 @@ def consortium_agent(state: ChargebackState) -> ChargebackState:
             degraded_reasons = state.setdefault("degraded_reasons", [])
             if reason not in degraded_reasons:
                 degraded_reasons.append(reason)
-    except Exception as exc:
-        logger.exception("Consortium evidence collection failed")
-        state["consortium"] = _empty_consortium_evidence(state, error=str(exc))
+    except Exception:
+        logger.error("Consortium evidence collection failed")
+        state["consortium"] = _empty_consortium_evidence(
+            state,
+            error="consortium_provider_unavailable",
+        )
+        state["evidence_collection_degraded"] = True
+        degraded_reasons = state.setdefault("degraded_reasons", [])
+        if "consortium_provider_unavailable" not in degraded_reasons:
+            degraded_reasons.append("consortium_provider_unavailable")
     return state

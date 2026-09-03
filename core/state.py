@@ -37,6 +37,12 @@ class OrderRecord(TypedDict):
     order_date: datetime
     is_disputed: bool
     is_fraud_flagged: bool
+    payment_provider: NotRequired[Literal["razorpay", "stripe"]]
+    provider_payment_id: NotRequired[str]
+    provider_order_id: NotRequired[str]
+    commerce_order_number: NotRequired[str]
+    tracking_id: NotRequired[str]
+    fulfillment_id: NotRequired[str]
 
 
 class CE3Qualification(TypedDict):
@@ -60,6 +66,9 @@ class TransactionEvidence(TypedDict):
     order_history_count: int
     previous_chargebacks: int
     prior_transactions: NotRequired[list[dict]]
+    provider_order_id: NotRequired[str]
+    commerce_order_reference: NotRequired[str]
+    commerce_order_number_reference: NotRequired[str]
     raw: dict
 
 
@@ -124,7 +133,14 @@ class ChargebackState(TypedDict):
     chargeback_id: str
     order_id: NotRequired[str]
     payment_id: NotRequired[str]
+    provider_order_id: NotRequired[str]
+    commerce_order_id: NotRequired[str]
+    commerce_order_number: NotRequired[str]
     tracking_id: NotRequired[str]
+    fulfillment_id: NotRequired[str]
+    correlation_status: NotRequired[Literal["resolved", "unresolved"]]
+    correlation_source: NotRequired[str]
+    correlation_failure_reason: NotRequired[str]
     chargeback_received_at: NotRequired[datetime]
     card_fingerprint: NotRequired[str]
     provider: NotRequired[str]
@@ -138,6 +154,10 @@ class ChargebackState(TypedDict):
     provider_phase: NotRequired[str]
     provider_reason_code: NotRequired[str]
     network_reason_code: NotRequired[str]
+    reason_mapping_version: NotRequired[str]
+    reason_mapping_source: NotRequired[str]
+    classification_audit: NotRequired[dict[str, Any]]
+    classification_resume_scheduled: NotRequired[bool]
     provider_account_id: NotRequired[str]
     provider_respond_by: NotRequired[datetime]
     payment_rail: NotRequired[str]

@@ -137,5 +137,6 @@ def test_shipping_agent_records_empty_evidence_on_collection_failure(monkeypatch
     assert result["shipping"]["status_category"] == "UNKNOWN"
     assert result["shipping"]["signature_obtained"] is False
     assert result["shipping"]["raw"]["source"] == "shipping_agent_empty"
-    assert result["shipping"]["raw"]["error"] == "carrier unavailable"
+    assert result["shipping"]["raw"]["error"] == "shipping_provider_unavailable"
+    assert "shipping_provider_unavailable" in result["degraded_reasons"]
     assert result["transaction"] is None

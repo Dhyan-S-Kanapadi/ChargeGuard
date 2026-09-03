@@ -99,7 +99,7 @@ def test_graph_invokes_purchase_history_only_for_visa_10_4(monkeypatch) -> None:
     for name in (
         "orchestrator_agent", "transaction_agent", "shipping_agent", "device_agent",
         "comms_agent", "consortium_agent", "delivery_photo_agent", "order_timeline_agent",
-        "accept_and_log_agent",
+        "order_correlation_agent", "accept_and_log_agent",
     ):
         monkeypatch.setattr(graph_module, name, identity)
     monkeypatch.setattr(graph_module, "purchase_history_agent", purchase)
@@ -111,6 +111,51 @@ def test_graph_invokes_purchase_history_only_for_visa_10_4(monkeypatch) -> None:
     app.invoke(_state(network="MASTERCARD"))
 
     assert calls == ["VISA:10.4"]
+
+
+def test_graph_resolves_order_after_transaction_before_shipping(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def identity(state: ChargebackState) -> ChargebackState:
+        return state
+
+    def transaction(state: ChargebackState) -> ChargebackState:
+        calls.append("transaction")
+        return state
+
+    def correlation(state: ChargebackState) -> ChargebackState:
+        calls.append("correlation")
+        return state
+
+    def shipping(state: ChargebackState) -> ChargebackState:
+        calls.append("shipping")
+        return state
+
+    def score(state: ChargebackState) -> ChargebackState:
+        state["decision"] = "ACCEPT"
+        return state
+
+    for name in (
+        "orchestrator_agent", "device_agent", "comms_agent", "consortium_agent",
+        "delivery_photo_agent", "order_timeline_agent", "purchase_history_agent",
+        "accept_and_log_agent",
+    ):
+        monkeypatch.setattr(graph_module, name, identity)
+    monkeypatch.setattr(graph_module, "transaction_agent", transaction)
+    monkeypatch.setattr(graph_module, "order_correlation_agent", correlation)
+    monkeypatch.setattr(graph_module, "shipping_agent", shipping)
+    monkeypatch.setattr(graph_module, "scoring_agent", score)
+    app = graph_module.build_graph().compile()
+
+    app.invoke(_state(reason_code="13.1"))
+    expedited = _state(reason_code="13.1")
+    expedited["investigation_plan"] = {"priority": "overdue"}
+    app.invoke(expedited)
+
+    assert calls == [
+        "transaction", "correlation", "shipping",
+        "transaction", "correlation", "shipping",
+    ]
 
 
 def test_rebuttal_packet_and_pdf_include_ce3_qualified_transaction_table(tmp_path) -> None:

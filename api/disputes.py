@@ -2,18 +2,22 @@ from copy import deepcopy
 import os
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 
 from analytics.merchant_stats import merchant_dispute_ratio
 from api.auth import require_api_key
 from api.schemas import (
     CaseSummaryResponse,
     DisputeDetail,
+    DisputeClassificationRequest,
+    DisputeClassificationResponse,
     DisputeSummary,
     OutcomeResponse,
     OutcomeUpdate,
 )
 from api.store import store
+from api.webhooks import run_chargeback_graph
+from api.razorpay_service import _playbook_available
 from core.outcomes import (
     OutcomeConflictError,
     OutcomeNotEligibleError,
@@ -140,6 +144,52 @@ def get_dispute_summary(chargeback_id: str) -> CaseSummaryResponse:
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Case summary generation is unavailable.") from exc
     return CaseSummaryResponse(chargeback_id=chargeback_id, human_review_summary=summary)
+
+
+@router.post(
+    "/{chargeback_id}/classification",
+    response_model=DisputeClassificationResponse,
+)
+def classify_dispute(
+    chargeback_id: str,
+    payload: DisputeClassificationRequest,
+    background_tasks: BackgroundTasks,
+) -> DisputeClassificationResponse:
+    record = store.get_dispute(chargeback_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Dispute not found.")
+    existing_network = record["state"].get("card_network")
+    if existing_network and existing_network != payload.card_network:
+        raise HTTPException(
+            status_code=409,
+            detail="Card network conflicts with verified payment data.",
+        )
+    if not _playbook_available(payload.card_network, payload.network_reason_code):
+        raise HTTPException(
+            status_code=422,
+            detail="No supported playbook and rebuttal template exist for this classification.",
+        )
+    try:
+        state = store.claim_dispute_classification(
+            chargeback_id,
+            card_network=payload.card_network,
+            network_reason_code=payload.network_reason_code,
+            actor_id=payload.actor_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if state is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Dispute is not eligible for classification resume or was already scheduled.",
+        )
+    background_tasks.add_task(run_chargeback_graph, state)
+    return DisputeClassificationResponse(
+        chargeback_id=chargeback_id,
+        status="scheduled",
+        card_network=payload.card_network,
+        network_reason_code=payload.network_reason_code,
+    )
 
 
 @router.post("/{chargeback_id}/outcome", response_model=OutcomeResponse)

@@ -251,6 +251,8 @@ def _collect_delhivery(state: ChargebackState) -> dict[str, Any]:
 
 
 def _collect_shipping_data(state: ChargebackState) -> tuple[dict[str, Any], str]:
+    if not state.get("tracking_id"):
+        raise ValueError("tracking_id_unavailable")
     primary = state["merchant_profile"].get("shipping_provider", "shiprocket")
     collectors = {
         "shiprocket": _collect_shiprocket,
@@ -266,18 +268,18 @@ def _collect_shipping_data(state: ChargebackState) -> tuple[dict[str, Any], str]
         return collectors[primary](state), primary
     except (ShiprocketConfigError, DelhiveryConfigError):
         raise
-    except Exception as primary_error:
-        logger.warning("%s shipping collection failed: %s", primary, primary_error)
+    except Exception:
+        logger.warning("%s shipping collection failed", primary)
         try:
             if _shipping_use_stubs(state, fallback):
                 return _stub_tracking_response(state), f"{fallback}_stub"
             return collectors[fallback](state), fallback
-        except (ShiprocketConfigError, DelhiveryConfigError):
-            raise
-        except Exception as fallback_error:
+        except (ShiprocketConfigError, DelhiveryConfigError) as fallback_error:
             raise ShippingCollectionError(
-                f"{primary} failed: {primary_error}; {fallback} failed: {fallback_error}"
+                "configured shipping providers failed"
             ) from fallback_error
+        except Exception as fallback_error:
+            raise ShippingCollectionError("configured shipping providers failed") from fallback_error
 
 
 def shipping_agent(state: ChargebackState) -> ChargebackState:
@@ -286,17 +288,29 @@ def shipping_agent(state: ChargebackState) -> ChargebackState:
     try:
         tracking, source = _collect_shipping_data(state)
         state["shipping"] = _build_shipping_evidence(tracking, source=source)
-    except (ShiprocketConfigError, DelhiveryConfigError) as exc:
+    except (ShiprocketConfigError, DelhiveryConfigError):
         provider = state["merchant_profile"].get("shipping_provider", "shiprocket")
-        logger.warning("%s credentials are unavailable: %s", provider, exc)
-        state["shipping"] = _empty_shipping_evidence(state, error=str(exc))
+        logger.warning("%s credentials are unavailable", provider)
+        state["shipping"] = _empty_shipping_evidence(
+            state,
+            error=f"{provider}_credentials_missing",
+        )
         state["evidence_collection_degraded"] = True
         degraded_reasons = state.setdefault("degraded_reasons", [])
         reason = f"{provider}_credentials_missing"
         if reason not in degraded_reasons:
             degraded_reasons.append(reason)
-    except Exception as exc:
-        logger.exception("Shipping evidence collection failed")
-        state["shipping"] = _empty_shipping_evidence(state, error=str(exc))
+    except Exception:
+        logger.error("Shipping evidence collection failed")
+        reason = (
+            "shipping_tracking_id_unavailable"
+            if not state.get("tracking_id")
+            else "shipping_provider_unavailable"
+        )
+        state["shipping"] = _empty_shipping_evidence(state, error=reason)
+        state["evidence_collection_degraded"] = True
+        degraded_reasons = state.setdefault("degraded_reasons", [])
+        if reason not in degraded_reasons:
+            degraded_reasons.append(reason)
 
     return state
