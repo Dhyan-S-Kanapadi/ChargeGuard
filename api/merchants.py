@@ -45,6 +45,11 @@ def create_merchant(payload: MerchantCreate) -> MerchantResponse:
     return _response(profile)
 
 
+@router.get("", response_model=list[MerchantResponse])
+def list_merchants() -> list[MerchantResponse]:
+    return [_response(profile) for profile in store.list_merchants()]
+
+
 @router.get("/{merchant_id}", response_model=MerchantResponse)
 def get_merchant(merchant_id: str) -> MerchantResponse:
     profile = store.get_merchant(merchant_id)

@@ -242,6 +242,7 @@ All routes except `/health` and the Razorpay webhook require `X-API-Key`, unless
 | --- | --- | --- |
 | `GET /health` | None | Model and stub-mode status |
 | `POST /merchants` | `X-API-Key` | Register merchant and provider mapping |
+| `GET /merchants` | `X-API-Key` | List merchants for operator workspace selection |
 | `GET /merchants/{id}` | `X-API-Key` | Retrieve merchant and monitoring ratios |
 | `POST /webhook/chargeback` | `X-API-Key` | Submit normalized internal chargeback |
 | `POST /webhook/razorpay` | Razorpay HMAC signature | Receive provider-native dispute event |

@@ -2,6 +2,8 @@
 
 Before performing substantial work in this repository, read the root-level `CLAUDE.md`. Treat `CLAUDE.md` as the primary project-context document for ChargeGuard. Then inspect the relevant implementation and tests before making changes.
 
+Before coding, also read the root-level `PONYTAIL.md` and apply its ChargeGuard-specific Ponytail policy.
+
 ChargeGuard is a financial dispute and chargeback management system. Keep responsibilities separated: `CLAUDE.md` owns project knowledge and architectural context; this `AGENTS.md` owns Codex operating rules, engineering constraints, safety requirements, testing expectations, and development practices. The executable code, schemas, and tests remain authoritative when documentation and behavior differ.
 
 ## Priority Order

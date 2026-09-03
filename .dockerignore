@@ -9,5 +9,9 @@ ml/artifacts
 output/rebuttals
 data
 tests
+frontend/node_modules
+frontend/dist
+frontend/playwright-report
+frontend/test-results
 pytest-tmp*
 .env

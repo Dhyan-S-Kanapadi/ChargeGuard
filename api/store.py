@@ -111,6 +111,11 @@ class InMemoryStore:
             )
             return deepcopy(profile) if profile else None
 
+    def list_merchants(self) -> list[MerchantProfile]:
+        with self._lock:
+            profiles = [deepcopy(profile) for profile in self._merchants.values()]
+        return sorted(profiles, key=lambda profile: profile["name"].casefold())
+
     def create_dispute(self, state: ChargebackState) -> bool:
         chargeback_id = state["chargeback_id"]
         now = datetime.now(timezone.utc)

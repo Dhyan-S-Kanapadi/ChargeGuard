@@ -54,7 +54,17 @@ app.include_router(assistant_router)
 app.include_router(razorpay_admin_router)
 app.include_router(razorpay_webhooks_router)
 app.include_router(razorpay_simulator_router)
-app.mount("/dashboard", StaticFiles(directory="static", html=True), name="dashboard")
+
+
+def _dashboard_directory() -> Path:
+    root = Path(__file__).resolve().parent
+    frontend_build = root / "frontend" / "dist"
+    if (frontend_build.joinpath("index.html").is_file()):
+        return frontend_build
+    return root / "static"
+
+
+app.mount("/dashboard", StaticFiles(directory=_dashboard_directory(), html=True), name="dashboard")
 
 
 def _model_loaded() -> bool:
