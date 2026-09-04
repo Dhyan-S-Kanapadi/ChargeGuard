@@ -65,6 +65,7 @@ def process_razorpay_provider_event(
         normalized = normalize_with_enrichment(
             envelope,
             event_id,
+            merchant,
             client_factory=client_factory,
         )
         result = process_normalized_dispute(

@@ -53,8 +53,26 @@ def test_razorpay_client_raises_for_error_response() -> None:
         client=httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.razorpay.com"),
     )
 
-    with pytest.raises(RazorpayRequestError):
+    with pytest.raises(RazorpayRequestError) as raised:
         client.get_order("order_123")
+    assert raised.value.status_code == 401
+    assert "unauthorized" not in str(raised.value)
+
+
+def test_razorpay_client_verifies_with_read_only_payment_list() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/payments"
+        assert request.url.params["count"] == "1"
+        return httpx.Response(200, json={"entity": "collection", "items": []})
+
+    client = RazorpayClient(
+        key_id="rzp_test_key",
+        key_secret="secret",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    client.verify_credentials()
 
 
 def test_razorpay_client_supports_dispute_lifecycle_requests() -> None:

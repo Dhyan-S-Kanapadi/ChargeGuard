@@ -19,6 +19,8 @@ from integrations.razorpay import (
     RazorpayConfigError,
     RazorpayRequestError,
 )
+from integrations.credential_secrets import CredentialStoreError
+from integrations.payment_client_factory import PaymentClientFactory, PaymentConnectorError
 from integrations.razorpay_schemas import (
     NormalizedRazorpayDispute,
     RazorpayWebhookEnvelope,
@@ -34,6 +36,7 @@ _TERMINAL_EVENTS = {
     "payment.dispute.lost",
     "payment.dispute.closed",
 }
+payment_client_factory = PaymentClientFactory(store)
 
 
 def simulator_metadata_allowed(envelope: RazorpayWebhookEnvelope) -> bool:
@@ -57,10 +60,13 @@ def simulator_metadata_allowed(envelope: RazorpayWebhookEnvelope) -> bool:
 def normalize_with_enrichment(
     envelope: RazorpayWebhookEnvelope,
     webhook_event_id: str,
+    merchant: MerchantProfile,
     *,
     client_factory: Callable[[], RazorpayClient] | None = None,
 ) -> NormalizedRazorpayDispute:
-    client_factory = client_factory or RazorpayClient.from_env
+    client_factory = client_factory or (
+        lambda: payment_client_factory.for_merchant(merchant, "razorpay")  # type: ignore[return-value]
+    )
     payment = envelope.payload.payment.entity if envelope.payload.payment else None
     needs_payment = (
         payment is None
@@ -79,8 +85,17 @@ def normalize_with_enrichment(
                 envelope.payload.dispute.entity.payment_id,
                 expand_card=True,
             )
-        except (RazorpayConfigError, RazorpayRequestError) as exc:
-            failure_reason = str(exc)
+        except (
+            CredentialStoreError,
+            PaymentConnectorError,
+            RazorpayConfigError,
+            RazorpayRequestError,
+        ) as exc:
+            failure_reason = (
+                "razorpay_payment_connector_unavailable"
+                if isinstance(exc, (CredentialStoreError, PaymentConnectorError, RazorpayConfigError))
+                else "razorpay_payment_enrichment_failed"
+            )
     normalized = normalize_dispute(
         envelope,
         webhook_event_id=webhook_event_id,

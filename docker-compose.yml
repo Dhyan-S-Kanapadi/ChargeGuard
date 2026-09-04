@@ -9,6 +9,7 @@ services:
     environment:
       PORT: "${PORT:-8000}"
       CHARGEGUARD_STORE_PATH: "${CHARGEGUARD_STORE_PATH:-/var/data/chargeguard_store.json}"
+      CHARGEGUARD_CREDENTIAL_STORE_PATH: "${CHARGEGUARD_CREDENTIAL_STORE_PATH:-/var/data/chargeguard_payment_credentials.json}"
     volumes:
       - chargeguard-data:/var/data
 

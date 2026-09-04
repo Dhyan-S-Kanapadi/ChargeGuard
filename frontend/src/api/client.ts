@@ -6,6 +6,7 @@ import {
   DisputeSummarySchema,
   HealthSchema,
   MerchantSchema,
+  PaymentConnectorSchema,
   OutcomeResponseSchema,
   PlatformSuggestionSchema,
   ProviderEventSchema,
@@ -57,7 +58,7 @@ function errorMessage(payload: unknown, fallback: string): string {
 }
 
 type RequestOptions<T> = {
-  method?: "GET" | "POST" | "PATCH";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   body?: unknown;
   auth?: boolean;
   schema: z.ZodType<T>;
@@ -131,6 +132,43 @@ export class ApiClient {
       method: "POST",
       body: { store_url: storeUrl },
       schema: PlatformSuggestionSchema,
+    });
+  }
+
+  paymentConnectors(merchantId: string, signal?: AbortSignal) {
+    return this.request(`/merchants/${encodeURIComponent(merchantId)}/payment-connectors`, {
+      schema: PaymentConnectorSchema.array(),
+      signal,
+    });
+  }
+
+  connectRazorpay(merchantId: string, keyId: string, keySecret: string, accountId: string) {
+    return this.request(`/merchants/${encodeURIComponent(merchantId)}/payment-connectors/razorpay`, {
+      method: "POST",
+      body: { key_id: keyId, key_secret: keySecret, razorpay_account_id: accountId },
+      schema: PaymentConnectorSchema,
+    });
+  }
+
+  connectStripe(merchantId: string, apiKey: string) {
+    return this.request(`/merchants/${encodeURIComponent(merchantId)}/payment-connectors/stripe`, {
+      method: "POST",
+      body: { api_key: apiKey },
+      schema: PaymentConnectorSchema,
+    });
+  }
+
+  verifyPaymentConnector(merchantId: string, connectorId: string) {
+    return this.request(`/merchants/${encodeURIComponent(merchantId)}/payment-connectors/${encodeURIComponent(connectorId)}/verify`, {
+      method: "POST",
+      schema: PaymentConnectorSchema,
+    });
+  }
+
+  disconnectPaymentConnector(merchantId: string, connectorId: string) {
+    return this.request(`/merchants/${encodeURIComponent(merchantId)}/payment-connectors/${encodeURIComponent(connectorId)}`, {
+      method: "DELETE",
+      schema: PaymentConnectorSchema,
     });
   }
 

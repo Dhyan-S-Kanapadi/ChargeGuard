@@ -21,6 +21,8 @@ export const MerchantSchema = z.object({
   name: z.string(),
   vertical: z.string(),
   payment_provider: z.string().nullable().optional(),
+  payment_connector_id: z.string().nullable().optional(),
+  payment_connector_ids: z.record(z.string(), z.string()).default({}),
   razorpay_account_id: z.string().nullable().optional(),
   shipping_provider: z.string().nullable().optional(),
   support_connector_ref: z.string().nullable().optional(),
@@ -39,6 +41,19 @@ export const MerchantSchema = z.object({
 
 export const PlatformSuggestionSchema = z.object({
   suggestion: z.enum(["shopify", "woocommerce", "custom", "unknown"]),
+});
+
+export const PaymentConnectorSchema = z.object({
+  connector_id: z.string(),
+  merchant_id: z.string(),
+  provider: z.enum(["razorpay", "stripe"]),
+  provider_account_id: z.string().nullable(),
+  status: z.enum(["pending", "verified", "invalid", "disconnected"]),
+  credential_hint: z.string(),
+  verified_at: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  last_error_code: z.string().nullable(),
 });
 
 export const DisputeSummarySchema = z.object({
@@ -203,6 +218,7 @@ export const SimulatorDisputeSchema = z.object({
 
 export type Health = z.infer<typeof HealthSchema>;
 export type Merchant = z.infer<typeof MerchantSchema>;
+export type PaymentConnector = z.infer<typeof PaymentConnectorSchema>;
 export type DisputeSummary = z.infer<typeof DisputeSummarySchema>;
 export type DisputeState = z.infer<typeof DisputeStateSchema>;
 export type DisputeDetail = z.infer<typeof DisputeDetailSchema>;

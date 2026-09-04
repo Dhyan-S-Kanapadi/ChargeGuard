@@ -154,6 +154,7 @@ def test_transaction_agent_collects_razorpay_evidence(monkeypatch) -> None:
             return {"id": order_id, "customer": {"email": "real@example.com"}}
 
     monkeypatch.delenv("CHARGEGUARD_USE_STUBS", raising=False)
+    monkeypatch.setenv("ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK", "true")
     monkeypatch.setattr(
         transaction.RazorpayClient,
         "from_env",
@@ -200,6 +201,7 @@ def test_transaction_agent_normalizes_stripe_evidence(monkeypatch) -> None:
     state["currency"] = "USD"
     state["merchant_profile"]["payment_provider"] = "stripe"
     monkeypatch.delenv("CHARGEGUARD_USE_STUBS", raising=False)
+    monkeypatch.setenv("ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK", "true")
     monkeypatch.setattr(
         transaction.StripeClient,
         "from_env",

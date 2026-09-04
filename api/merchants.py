@@ -39,6 +39,8 @@ def _response(profile: MerchantProfile) -> MerchantResponse:
         name=profile["name"],
         vertical=profile["vertical"],
         payment_provider=profile.get("payment_provider"),
+        payment_connector_id=profile.get("payment_connector_id"),
+        payment_connector_ids=profile.get("payment_connector_ids", {}),
         razorpay_account_id=profile.get("razorpay_account_id"),
         shipping_provider=profile.get("shipping_provider"),
         support_connector_ref=profile.get("support_connector_ref"),

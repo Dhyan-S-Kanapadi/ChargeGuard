@@ -55,5 +55,21 @@ def test_stripe_client_raises_for_error_response() -> None:
         client=httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.stripe.com"),
     )
 
-    with pytest.raises(StripeRequestError):
+    with pytest.raises(StripeRequestError) as raised:
         client.get_payment_intent("pi_123")
+    assert raised.value.status_code == 401
+    assert "unauthorized" not in str(raised.value)
+
+
+def test_stripe_client_verifies_with_read_only_account_lookup() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/account"
+        return httpx.Response(200, json={"id": "acct_123"})
+
+    client = StripeClient(
+        api_key="sk_test_123",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert client.verify_credentials() == "acct_123"

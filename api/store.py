@@ -6,7 +6,13 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
-from core.state import ClassificationSuggestion, ChargebackState, MerchantProfile, OrderRecord
+from core.state import (
+    ClassificationSuggestion,
+    ChargebackState,
+    MerchantProfile,
+    OrderRecord,
+    PaymentConnector,
+)
 
 
 PROVIDER_EVENT_STATES = frozenset(
@@ -71,6 +77,8 @@ class InMemoryStore:
         self._lock = RLock()
         self._path = Path(path) if path else None
         self._merchants: dict[str, MerchantProfile] = {}
+        self._payment_connectors: dict[str, PaymentConnector] = {}
+        self._payment_connector_audit: list[dict[str, Any]] = []
         self._orders: dict[str, OrderRecord] = {}
         self._disputes: dict[str, dict[str, Any]] = {}
         self._provider_events: dict[str, dict[str, Any]] = {}
@@ -84,6 +92,8 @@ class InMemoryStore:
     def clear(self) -> None:
         with self._lock:
             self._merchants.clear()
+            self._payment_connectors.clear()
+            self._payment_connector_audit.clear()
             self._orders.clear()
             self._disputes.clear()
             self._provider_events.clear()
@@ -101,6 +111,13 @@ class InMemoryStore:
                 for merchant in self._merchants.values()
             ):
                 return False
+            if account_id and any(
+                connector["provider"] == "razorpay"
+                and connector["provider_account_id"] == account_id
+                and connector["status"] == "verified"
+                for connector in self._payment_connectors.values()
+            ):
+                return False
             self._merchants[merchant_id] = deepcopy(profile)
             self._save()
             return True
@@ -110,8 +127,28 @@ class InMemoryStore:
             profile = self._merchants.get(merchant_id)
             return deepcopy(profile) if profile else None
 
-    def get_merchant_by_razorpay_account_id(self, account_id: str) -> MerchantProfile | None:
+    def get_merchant_by_razorpay_account_id(
+        self,
+        account_id: str,
+        *,
+        allow_legacy: bool = True,
+    ) -> MerchantProfile | None:
         with self._lock:
+            connector = next(
+                (
+                    item
+                    for item in self._payment_connectors.values()
+                    if item["provider"] == "razorpay"
+                    and item["provider_account_id"] == account_id
+                    and item["status"] == "verified"
+                ),
+                None,
+            )
+            if connector is not None:
+                profile = self._merchants.get(connector["merchant_id"])
+                return deepcopy(profile) if profile else None
+            if not allow_legacy:
+                return None
             profile = next(
                 (
                     merchant
@@ -121,6 +158,225 @@ class InMemoryStore:
                 None,
             )
             return deepcopy(profile) if profile else None
+
+    def create_payment_connector(
+        self,
+        connector: PaymentConnector,
+        *,
+        audit_action: str,
+    ) -> bool:
+        """Persist a non-active connector attempt without any credential material."""
+        with self._lock:
+            if connector["merchant_id"] not in self._merchants:
+                raise KeyError(connector["merchant_id"])
+            if connector["connector_id"] in self._payment_connectors:
+                return False
+            connectors_before = deepcopy(self._payment_connectors)
+            audit_before = deepcopy(self._payment_connector_audit)
+            try:
+                self._payment_connectors[connector["connector_id"]] = deepcopy(connector)
+                self._append_connector_audit(connector, audit_action)
+                self._save()
+            except Exception:
+                self._payment_connectors = connectors_before
+                self._payment_connector_audit = audit_before
+                raise
+            return True
+
+    def activate_payment_connector(
+        self,
+        connector: PaymentConnector,
+        *,
+        audit_action: str,
+    ) -> str | None:
+        """Atomically activate one verified connector and detach its predecessor."""
+        if connector["status"] != "verified":
+            raise ValueError("Only verified payment connectors can be activated.")
+        with self._lock:
+            merchant = self._merchants.get(connector["merchant_id"])
+            if merchant is None:
+                raise KeyError(connector["merchant_id"])
+            if connector["provider"] == "razorpay" and connector["provider_account_id"]:
+                conflict = any(
+                    item["merchant_id"] != connector["merchant_id"]
+                    and item["provider"] == "razorpay"
+                    and item["provider_account_id"] == connector["provider_account_id"]
+                    and item["status"] == "verified"
+                    for item in self._payment_connectors.values()
+                )
+                conflict = conflict or any(
+                    merchant_id != connector["merchant_id"]
+                    and item.get("razorpay_account_id") == connector["provider_account_id"]
+                    for merchant_id, item in self._merchants.items()
+                )
+                if conflict:
+                    raise ValueError("razorpay_account_already_connected")
+
+            merchants_before = deepcopy(self._merchants)
+            connectors_before = deepcopy(self._payment_connectors)
+            audit_before = deepcopy(self._payment_connector_audit)
+
+            previous = next(
+                (
+                    item
+                    for item in self._payment_connectors.values()
+                    if item["merchant_id"] == connector["merchant_id"]
+                    and item["provider"] == connector["provider"]
+                    and item["status"] == "verified"
+                ),
+                None,
+            )
+            previous_id = previous["connector_id"] if previous else None
+            if previous is not None and previous_id != connector["connector_id"]:
+                previous["status"] = "disconnected"
+                previous["updated_at"] = connector["updated_at"]
+                self._append_connector_audit(previous, "rotated_out")
+
+            self._payment_connectors[connector["connector_id"]] = deepcopy(connector)
+            connector_ids = dict(merchant.get("payment_connector_ids", {}))
+            connector_ids[connector["provider"]] = connector["connector_id"]
+            merchant["payment_connector_ids"] = connector_ids
+            merchant["payment_connector_id"] = connector["connector_id"]
+            merchant["payment_provider"] = connector["provider"]
+            if connector["provider"] == "razorpay":
+                merchant["razorpay_account_id"] = connector["provider_account_id"]
+            self._append_connector_audit(connector, audit_action)
+            try:
+                self._save()
+            except Exception:
+                self._merchants = merchants_before
+                self._payment_connectors = connectors_before
+                self._payment_connector_audit = audit_before
+                raise
+            return previous_id
+
+    def get_payment_connector(
+        self,
+        merchant_id: str,
+        connector_id: str,
+    ) -> PaymentConnector | None:
+        with self._lock:
+            connector = self._payment_connectors.get(connector_id)
+            if connector is None or connector["merchant_id"] != merchant_id:
+                return None
+            return deepcopy(connector)
+
+    def list_payment_connectors(self, merchant_id: str) -> list[PaymentConnector]:
+        with self._lock:
+            connectors = [
+                deepcopy(item)
+                for item in self._payment_connectors.values()
+                if item["merchant_id"] == merchant_id
+            ]
+        return sorted(connectors, key=lambda item: item["created_at"], reverse=True)
+
+    def update_payment_connector_status(
+        self,
+        merchant_id: str,
+        connector_id: str,
+        *,
+        status: str | None = None,
+        last_error_code: str | None,
+        verified_at: datetime | None = None,
+        audit_action: str,
+    ) -> PaymentConnector | None:
+        with self._lock:
+            connector = self._payment_connectors.get(connector_id)
+            if connector is None or connector["merchant_id"] != merchant_id:
+                return None
+            merchants_before = deepcopy(self._merchants)
+            connectors_before = deepcopy(self._payment_connectors)
+            audit_before = deepcopy(self._payment_connector_audit)
+            if status is not None:
+                if status not in {"pending", "verified", "invalid", "disconnected"}:
+                    raise ValueError("Invalid payment connector status.")
+                connector["status"] = status  # type: ignore[typeddict-item]
+            connector["last_error_code"] = last_error_code
+            connector["verified_at"] = verified_at
+            connector["updated_at"] = datetime.now(timezone.utc)
+            if connector["status"] in {"invalid", "disconnected"}:
+                self._detach_payment_connector(connector)
+            self._append_connector_audit(connector, audit_action)
+            try:
+                self._save()
+            except Exception:
+                self._merchants = merchants_before
+                self._payment_connectors = connectors_before
+                self._payment_connector_audit = audit_before
+                raise
+            return deepcopy(connector)
+
+    def disconnect_payment_connector(
+        self,
+        merchant_id: str,
+        connector_id: str,
+    ) -> PaymentConnector | None:
+        return self.update_payment_connector_status(
+            merchant_id,
+            connector_id,
+            status="disconnected",
+            last_error_code=None,
+            audit_action="deleted",
+        )
+
+    def list_payment_connector_audit(self, merchant_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            return [
+                deepcopy(item)
+                for item in self._payment_connector_audit
+                if item["merchant_id"] == merchant_id
+            ]
+
+    def _detach_payment_connector(self, connector: PaymentConnector) -> None:
+        merchant = self._merchants.get(connector["merchant_id"])
+        if merchant is None:
+            return
+        connector_ids = dict(merchant.get("payment_connector_ids", {}))
+        if connector_ids.get(connector["provider"]) == connector["connector_id"]:
+            connector_ids.pop(connector["provider"], None)
+            merchant["payment_connector_ids"] = connector_ids
+        if merchant.get("payment_connector_id") == connector["connector_id"]:
+            replacements = [
+                item
+                for item in self._payment_connectors.values()
+                if item["merchant_id"] == connector["merchant_id"]
+                and item["connector_id"] != connector["connector_id"]
+                and item["status"] == "verified"
+            ]
+            replacement = max(
+                replacements,
+                key=lambda item: item["updated_at"],
+                default=None,
+            )
+            merchant["payment_connector_id"] = (
+                replacement["connector_id"] if replacement else None
+            )
+            merchant["payment_provider"] = replacement["provider"] if replacement else None
+        if connector["provider"] == "razorpay" and (
+            merchant.get("razorpay_account_id") == connector["provider_account_id"]
+        ):
+            replacement_id = connector_ids.get("razorpay")
+            replacement = self._payment_connectors.get(replacement_id or "")
+            merchant["razorpay_account_id"] = (
+                replacement["provider_account_id"] if replacement else None
+            )
+
+    def _append_connector_audit(
+        self,
+        connector: PaymentConnector,
+        action: str,
+    ) -> None:
+        self._payment_connector_audit.append(
+            {
+                "connector_id": connector["connector_id"],
+                "merchant_id": connector["merchant_id"],
+                "provider": connector["provider"],
+                "action": action,
+                "created_at": datetime.now(timezone.utc),
+                "status": connector["status"],
+                "error_code": connector["last_error_code"],
+            }
+        )
 
     def list_merchants(self) -> list[MerchantProfile]:
         with self._lock:
@@ -136,6 +392,14 @@ class InMemoryStore:
             if account_id and any(
                 other_id != merchant_id and other.get("razorpay_account_id") == account_id
                 for other_id, other in self._merchants.items()
+            ):
+                raise ValueError("Razorpay account ID already exists.")
+            if account_id and any(
+                connector["merchant_id"] != merchant_id
+                and connector["provider"] == "razorpay"
+                and connector["provider_account_id"] == account_id
+                and connector["status"] == "verified"
+                for connector in self._payment_connectors.values()
             ):
                 raise ValueError("Razorpay account ID already exists.")
             profile.update(deepcopy(updates))
@@ -728,10 +992,18 @@ class InMemoryStore:
             payload = json.load(handle, object_hook=_decode_json_value)
 
         merchants = payload.get("merchants", {})
+        payment_connectors = payload.get("payment_connectors", {})
+        payment_connector_audit = payload.get("payment_connector_audit", [])
         orders = payload.get("orders", {})
         disputes = payload.get("disputes", {})
-        if not isinstance(merchants, dict) or not isinstance(orders, dict) or not isinstance(disputes, dict):
-            raise ValueError("Store file must contain object maps for merchants, orders, and disputes.")
+        if (
+            not isinstance(merchants, dict)
+            or not isinstance(payment_connectors, dict)
+            or not isinstance(payment_connector_audit, list)
+            or not isinstance(orders, dict)
+            or not isinstance(disputes, dict)
+        ):
+            raise ValueError("Store file must contain valid merchant, connector, order, and dispute data.")
 
         self._merchants = deepcopy(merchants)
         for merchant in self._merchants.values():
@@ -745,6 +1017,8 @@ class InMemoryStore:
                     "platform_credential_reverification_required"
                 )
         self._orders = deepcopy(orders)
+        self._payment_connectors = deepcopy(payment_connectors)
+        self._payment_connector_audit = deepcopy(payment_connector_audit)
         self._disputes = deepcopy(disputes)
         provider_events = payload.get("provider_events", {})
         simulator_disputes = payload.get("simulator_disputes", {})
@@ -780,6 +1054,8 @@ class InMemoryStore:
                 merchant.pop(key, None)
         payload = {
             "merchants": merchants,
+            "payment_connectors": self._payment_connectors,
+            "payment_connector_audit": self._payment_connector_audit,
             "orders": self._orders,
             "disputes": self._disputes,
             "provider_events": self._provider_events,
