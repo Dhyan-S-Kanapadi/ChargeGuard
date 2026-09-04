@@ -45,7 +45,7 @@ curl -s -X POST "${BASE_URL}/merchants" "${HDR_AUTH[@]}" "${HDR_JSON[@]}" \
   -d '{"merchant_id":"demo_merchant","name":"Demo Store","vertical":"ecommerce","payment_provider":"razorpay","shipping_provider":"shiprocket","average_order_value":1499,"chargeback_history_count":3}' \
   -o /dev/null -w "  status: %{http_code}\n"
 
-say "2. STRONG CASE - delivered, signed, OTP verified, no fraud signals -> expect FIGHT"
+say "2. STRONG CASE - authenticated internal event, delivered, OTP verified -> expect FIGHT"
 curl -s -X POST "${BASE_URL}/webhook/chargeback" "${HDR_AUTH[@]}" "${HDR_JSON[@]}" \
   -d "{\"chargeback_id\":\"cb_demo_fight\",\"reason_code\":\"13.1\",\"card_network\":\"VISA\",\"dispute_amount\":1499,\"currency\":\"INR\",\"filing_deadline\":\"$(future_deadline 5)\",\"merchant_id\":\"demo_merchant\",\"order_id\":\"order_fight\",\"payment_id\":\"pay_fight\",\"tracking_id\":\"track_fight\"}" \
   -o /dev/null -w "  status: %{http_code}\n"
@@ -57,15 +57,13 @@ curl -s -X POST "${BASE_URL}/webhook/chargeback" "${HDR_AUTH[@]}" "${HDR_JSON[@]
   -o /dev/null -w "  status: %{http_code}\n"
 show_result "$(wait_for_decision cb_demo_accept)"
 
-say "4. DEGRADED CASE - model artifact unavailable -> expect ESCALATE_DEGRADED, never a silent guess"
-mv ml/artifacts/win_probability_model.pkl /tmp/model_backup.pkl 2>/dev/null || true
+say "4. DEGRADED CASE - required evidence unavailable -> expect ESCALATE_DEGRADED, never a silent guess"
 curl -s -X POST "${BASE_URL}/webhook/chargeback" "${HDR_AUTH[@]}" "${HDR_JSON[@]}" \
-  -d "{\"chargeback_id\":\"cb_demo_escalate\",\"reason_code\":\"13.1\",\"card_network\":\"VISA\",\"dispute_amount\":1499,\"currency\":\"INR\",\"filing_deadline\":\"$(future_deadline 5)\",\"merchant_id\":\"demo_merchant\",\"order_id\":\"order_escalate\",\"payment_id\":\"pay_escalate\",\"tracking_id\":\"track_escalate\"}" \
+  -d "{\"chargeback_id\":\"cb_demo_escalate\",\"reason_code\":\"13.1\",\"card_network\":\"VISA\",\"dispute_amount\":1499,\"currency\":\"INR\",\"filing_deadline\":\"$(future_deadline 5)\",\"merchant_id\":\"demo_merchant\",\"order_id\":\"order_escalate\",\"payment_id\":\"pay_escalate\",\"tracking_id\":\"track_escalate\",\"simulate_evidence_degraded\":true}" \
   -o /dev/null -w "  status: %{http_code}\n"
 show_result "$(wait_for_decision cb_demo_escalate)"
-mv /tmp/model_backup.pkl ml/artifacts/win_probability_model.pkl 2>/dev/null || true
 
-say "5. Live /stats across everything just processed"
+say "5. Current /stats across everything just processed"
 curl -s "${BASE_URL}/stats" "${HDR_AUTH[@]}"; echo
 
 say "Done. FIGHT case PDF ready at: output/rebuttals/cb_demo_fight_rebuttal.pdf"

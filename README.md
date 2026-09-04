@@ -244,7 +244,7 @@ FastAPI serves `frontend/dist` at `/dashboard/` when present and falls back to t
 
 ## Demo
 
-Train the model, start the API with deterministic stub evidence and a local API key, then run the manual demo:
+Train the model, start the API with deterministic stub evidence and an API key, then run the manual demo:
 
 ```bash
 poetry run python -m ml.train
@@ -252,7 +252,17 @@ CHARGEGUARD_USE_STUBS=true API_KEY=demo-key poetry run uvicorn main:app --port 8
 API_KEY=demo-key poetry run python scripts/demo.py
 ```
 
-The script creates one merchant and demonstrates the FIGHT, ACCEPT, and ESCALATE_DEGRADED decision paths, including the generated FIGHT rebuttal PDF path.
+The script creates an isolated merchant and demonstrates the FIGHT, ACCEPT, and ESCALATE_DEGRADED decision paths, including the generated FIGHT rebuttal PDF path. Every invocation uses unique IDs, so it can be safely rehearsed multiple times against a persistent demo deployment.
+
+Target a deployed instance by setting its public origin:
+
+```bash
+CHARGEGUARD_API_URL=https://your-chargeguard-host.example \
+API_KEY=your-deployment-api-key \
+poetry run python scripts/demo.py
+```
+
+The script intentionally requires `CHARGEGUARD_USE_STUBS=true` on the target. It proves ChargeGuard's deterministic orchestration and decision paths; it does not claim live provider evidence or real network filing. See [`HACKATHON_DEMO.md`](HACKATHON_DEMO.md) for the presentation runbook and fallback plan.
 
 ## Testing
 
