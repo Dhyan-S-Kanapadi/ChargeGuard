@@ -549,6 +549,8 @@ py scripts/simulate_razorpay_dispute.py out-of-order
 
 Lifecycle scenarios are `action-required`, `under-review`, `won`, `lost`, and `closed`. The simulator signs the exact JSON sent to the real `/webhook/razorpay` endpoint. Both the script and development router reject production mode, and simulator delivery is restricted to a loopback `/webhook/razorpay` URL. It never contacts Razorpay or creates a real dispute; `disp_SIM_...` IDs exist only in ChargeGuard.
 
+The dashboard simulator also exposes a fixed catalog of 24 realistic examples: four each for decision routing, network playbooks, payment rails, webhook trust, provider lifecycle, and automation boundaries. A run generates unique identifiers and seeds an exact merchant-owned synthetic order before delivering the event, so the real order-correlation and shipping paths are exercised. Use `GET /dev/razorpay-simulator/scenarios` or select a case on the Simulator page. See [SIMULATION_TEST_MATRIX.md](SIMULATION_TEST_MATRIX.md) for the runnable examples, automated failure matrix, expected results, and explicit production boundary.
+
 Run Razorpay-focused tests with `py -m pytest -q tests/test_razorpay_webhooks.py tests/test_razorpay_event_recovery.py tests/test_razorpay_integration.py tests/test_razorpay_reconciliation.py tests/test_razorpay_simulator.py`.
 
 The current synchronized store is adequate for one-process staging when `CHARGEGUARD_STORE_PATH` is configured. Production multi-worker deployment must replace it with a shared transactional database plus a queue/outbox so event claims and workflow scheduling remain atomic across processes.

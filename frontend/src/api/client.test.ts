@@ -72,4 +72,51 @@ describe("ApiClient", () => {
       suggestion_id: "rcs_1",
     });
   });
+
+  it("loads and runs validated simulator catalog scenarios", async () => {
+    let runBody: unknown;
+    server.use(
+      http.get("http://localhost/dev/razorpay-simulator/scenarios", () => HttpResponse.json([{
+        id: "webhook-invalid-signature",
+        family: "Webhook trust",
+        title: "Invalid signature",
+        description: "Synthetic negative path",
+        expected: "HTTP 401",
+        behavior: "invalid_signature",
+        payload: {
+          payment_amount_paise: 1000,
+          dispute_amount_paise: 1000,
+          currency: "INR",
+          method: "card",
+          card_network: "VISA",
+          network_reason_code: "13.1",
+          razorpay_reason_code: "fraudulent",
+          respond_within_hours: 72,
+        },
+      }])),
+      http.post("http://localhost/dev/razorpay-simulator/scenarios/webhook-invalid-signature/run", async ({ request }) => {
+        runBody = await request.json();
+        return HttpResponse.json({
+          scenario_id: "webhook-invalid-signature",
+          dispute_id: "disp_SIM_1",
+          order_seeded: true,
+          expected: "HTTP 401",
+          deliveries: [{
+            event_id: "evt_SIM_1",
+            event_name: "payment.dispute.created",
+            delivery: { status_code: 401 },
+            payload_sha256: "abc",
+          }],
+        });
+      }),
+    );
+    const client = new ApiClient("http://localhost", "key");
+
+    const catalog = await client.simulationScenarios();
+    const result = await client.runSimulationScenario(catalog[0].id, "merchant_sim");
+
+    expect(catalog[0].family).toBe("Webhook trust");
+    expect(result.deliveries[0].delivery.status_code).toBe(401);
+    expect(runBody).toEqual({ merchant_id: "merchant_sim" });
+  });
 });

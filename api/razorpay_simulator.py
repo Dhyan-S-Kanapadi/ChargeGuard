@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import secrets
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -13,8 +14,17 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from api.auth import require_api_key
-from api.schemas import RazorpaySimulatorCreate, RazorpaySimulatorTransition
-from api.store import store
+from api.schemas import (
+    RazorpaySimulatorCreate,
+    RazorpaySimulatorScenarioRun,
+    RazorpaySimulatorTransition,
+)
+from api.simulation_scenarios import (
+    get_simulation_scenario,
+    list_simulation_scenarios,
+)
+from api.store import OrderIdentifierConflictError, store
+from core.state import OrderRecord
 
 
 router = APIRouter(
@@ -126,17 +136,44 @@ def deliver_simulator_event(
     return {"status_code": response.status_code, "body": response.text, "signature": signature}
 
 
-def _deliver(record: dict[str, Any], event_name: str, state: str) -> dict[str, Any]:
+def _prepared_event(
+    record: dict[str, Any],
+    event_name: str,
+    state: str,
+) -> tuple[str, bytes]:
     event_id = "evt_SIM_" + secrets.token_urlsafe(16)
     envelope = build_simulator_envelope(record, event_name, state)
     body = json.dumps(envelope, separators=(",", ":")).encode("utf-8")
+    return event_id, body
+
+
+def _deliver_prepared(
+    event_id: str,
+    body: bytes,
+    *,
+    webhook_secret: str | None = None,
+) -> dict[str, Any]:
     delivery = deliver_simulator_event(
         os.getenv("RAZORPAY_SIMULATOR_TARGET_URL", "http://127.0.0.1:8000/webhook/razorpay"),
         body,
         event_id,
-        _secret(),
+        webhook_secret if webhook_secret is not None else _secret(),
     )
-    return {"event_id": event_id, "event_name": event_name, "delivery": delivery, "payload_sha256": hashlib.sha256(body).hexdigest()}
+    return {
+        "event_id": event_id,
+        "delivery": {
+            key: value for key, value in delivery.items() if key != "signature"
+        },
+        "payload_sha256": hashlib.sha256(body).hexdigest(),
+    }
+
+
+def _deliver(record: dict[str, Any], event_name: str, state: str) -> dict[str, Any]:
+    event_id, body = _prepared_event(record, event_name, state)
+    return {
+        "event_name": event_name,
+        **_deliver_prepared(event_id, body),
+    }
 
 
 def _safe_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -147,10 +184,10 @@ def _safe_record(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@router.post("/disputes")
-def create_simulated_dispute(payload: RazorpaySimulatorCreate) -> dict[str, Any]:
-    _require_simulator()
-    merchant = store.get_merchant(payload.merchant_id)
+def _validate_create(
+    payload: RazorpaySimulatorCreate,
+    merchant: dict[str, Any] | None,
+) -> dict[str, Any]:
     if merchant is None:
         raise HTTPException(status_code=404, detail="Merchant not found.")
     if merchant.get("payment_provider") != "razorpay" or not merchant.get("razorpay_account_id"):
@@ -159,21 +196,106 @@ def create_simulated_dispute(payload: RazorpaySimulatorCreate) -> dict[str, Any]
         raise HTTPException(status_code=422, detail="Dispute amount cannot exceed payment amount.")
     if payload.method == "card" and payload.card_network is None:
         raise HTTPException(status_code=422, detail="Card simulations require card_network.")
+    return merchant
+
+
+def _seed_simulator_order(record: dict[str, Any]) -> None:
+    """Give the real graph an exact merchant-owned order to correlate."""
+    merchant_id = record["merchant_id"]
+    suffix = record["dispute_id"].removeprefix("disp_SIM_")
+    order: OrderRecord = {
+        "order_id": record["order_id"],
+        "merchant_id": merchant_id,
+        "customer_email": record.get("customer_email") or f"simulator+{suffix}@example.test",
+        "customer_ip": "192.0.2.10",
+        "user_agent": "ChargeGuard-Simulator/1.0",
+        "shipping_address": "Synthetic simulator address, Bengaluru",
+        "order_date": record["created_at"],
+        "is_disputed": False,
+        "is_fraud_flagged": False,
+        "payment_provider": "razorpay",
+        "provider_payment_id": record["payment_id"],
+        "provider_order_id": record["order_id"],
+        "commerce_order_number": f"SIM-{suffix}",
+        "tracking_id": f"trk_SIM_{suffix}",
+        "fulfillment_id": f"ful_SIM_{suffix}",
+    }
+    try:
+        created = store.create_order(order)
+    except OrderIdentifierConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not created:
+        raise HTTPException(
+            status_code=409,
+            detail="Simulator order or payment identifiers were already used; generate new test IDs.",
+        )
+
+
+def _create_record(
+    payload: RazorpaySimulatorCreate,
+    merchant: dict[str, Any],
+    *,
+    scenario_id: str | None = None,
+    account_id: str | None = None,
+) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     record = {
         **payload.model_dump(),
         "dispute_id": "disp_SIM_" + secrets.token_urlsafe(16),
-        "account_id": merchant["razorpay_account_id"],
+        "account_id": account_id or merchant["razorpay_account_id"],
         "state": "open",
         "created_at": now,
         "respond_by": now + timedelta(hours=payload.respond_within_hours),
         "deliveries": [],
     }
-    store.create_simulator_dispute(record)
-    result = _deliver(record, "payment.dispute.created", "open")
+    if scenario_id is not None:
+        record["scenario_id"] = scenario_id
+    _seed_simulator_order(record)
+    if not store.create_simulator_dispute(record):
+        raise HTTPException(status_code=409, detail="Simulated dispute already exists.")
+    return record
+
+
+def _append_delivery(
+    record: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    state: str | None = None,
+) -> None:
     record["deliveries"].append(result)
-    store.update_simulator_dispute(record["dispute_id"], deliveries=record["deliveries"])
-    return {"dispute_id": record["dispute_id"], **result}
+    updates: dict[str, Any] = {"deliveries": record["deliveries"]}
+    if state is not None:
+        record["state"] = state
+        updates["state"] = state
+    store.update_simulator_dispute(record["dispute_id"], **updates)
+
+
+def _await_provider_event(event_id: str, timeout_seconds: float = 10.0) -> None:
+    """Serialize simulator lifecycle events behind processing of the prior event."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        event = store.get_provider_event(event_id)
+        if event is not None and event.get("processing_state") not in {
+            "received",
+            "queued",
+            "processing",
+        }:
+            return
+        time.sleep(0.02)
+    raise HTTPException(
+        status_code=504,
+        detail="Timed out waiting for the prior simulated provider event to finish.",
+    )
+
+
+@router.post("/disputes")
+def create_simulated_dispute(payload: RazorpaySimulatorCreate) -> dict[str, Any]:
+    _require_simulator()
+    merchant = _validate_create(payload, store.get_merchant(payload.merchant_id))
+    record = _create_record(payload, merchant)
+    result = _deliver(record, "payment.dispute.created", "open")
+    _append_delivery(record, result)
+    return {"dispute_id": record["dispute_id"], "order_seeded": True, **result}
 
 
 @router.post("/disputes/{dispute_id}/transition")
@@ -184,10 +306,89 @@ def transition_simulated_dispute(dispute_id: str, payload: RazorpaySimulatorTran
         raise HTTPException(status_code=404, detail="Simulated dispute not found.")
     if not payload.force and payload.state not in _ALLOWED_TRANSITIONS.get(record["state"], set()):
         raise HTTPException(status_code=409, detail="Invalid simulated dispute transition.")
+    if record["deliveries"]:
+        _await_provider_event(record["deliveries"][-1]["event_id"])
     result = _deliver(record, _EVENTS[payload.state], payload.state)
-    record["deliveries"].append(result)
-    store.update_simulator_dispute(dispute_id, state=payload.state, deliveries=record["deliveries"])
+    _append_delivery(record, result, state=payload.state)
     return {"dispute_id": dispute_id, "state": payload.state, **result}
+
+
+@router.get("/scenarios")
+def list_scenarios() -> list[dict[str, Any]]:
+    _require_simulator()
+    return list_simulation_scenarios()
+
+
+@router.post("/scenarios/{scenario_id}/run")
+def run_scenario(
+    scenario_id: str,
+    payload: RazorpaySimulatorScenarioRun,
+) -> dict[str, Any]:
+    _require_simulator()
+    scenario = get_simulation_scenario(scenario_id)
+    if scenario is None:
+        raise HTTPException(status_code=404, detail="Simulation scenario not found.")
+    create_payload = RazorpaySimulatorCreate.model_validate(
+        {
+            "merchant_id": payload.merchant_id,
+            "payment_id": "pay_SIM_" + secrets.token_urlsafe(12),
+            "order_id": "order_SIM_" + secrets.token_urlsafe(12),
+            **scenario["payload"],
+        }
+    )
+    merchant = _validate_create(
+        create_payload,
+        store.get_merchant(create_payload.merchant_id),
+    )
+    behavior = scenario["behavior"]
+    account_id = None
+    if behavior == "unknown_account":
+        account_id = "acc_SIM_UNKNOWN_" + secrets.token_urlsafe(8)
+    record = _create_record(
+        create_payload,
+        merchant,
+        scenario_id=scenario_id,
+        account_id=account_id,
+    )
+
+    if behavior == "invalid_signature":
+        event_id, body = _prepared_event(record, "payment.dispute.created", "open")
+        result = {
+            "event_name": "payment.dispute.created",
+            **_deliver_prepared(event_id, body, webhook_secret=_secret() + "-invalid"),
+        }
+        _append_delivery(record, result, state="signature_rejected")
+    elif behavior == "duplicate":
+        event_id, body = _prepared_event(record, "payment.dispute.created", "open")
+        for _ in range(2):
+            result = {
+                "event_name": "payment.dispute.created",
+                **_deliver_prepared(event_id, body),
+            }
+            _append_delivery(record, result)
+    elif behavior == "out_of_order_won":
+        result = _deliver(record, _EVENTS["won"], "won")
+        _append_delivery(record, result, state="won")
+    else:
+        result = _deliver(record, "payment.dispute.created", "open")
+        _append_delivery(record, result)
+        next_state = {
+            "created_then_action_required": "action_required",
+            "created_then_under_review": "under_review",
+            "created_then_closed": "closed",
+        }.get(behavior)
+        if next_state is not None:
+            _await_provider_event(result["event_id"])
+            result = _deliver(record, _EVENTS[next_state], next_state)
+            _append_delivery(record, result, state=next_state)
+
+    return {
+        "scenario_id": scenario_id,
+        "dispute_id": record["dispute_id"],
+        "order_seeded": True,
+        "expected": scenario["expected"],
+        "deliveries": record["deliveries"],
+    }
 
 
 @router.get("/disputes")
@@ -200,7 +401,11 @@ def list_simulated_disputes() -> list[dict[str, Any]]:
 def list_simulator_events() -> list[dict[str, Any]]:
     _require_simulator()
     return [
-        {key: value for key, value in event.items() if key not in {"payload", "customer_email", "contact", "vpa"}}
+        {
+            key: value
+            for key, value in event.items()
+            if key not in {"event_data", "payload", "customer_email", "contact", "vpa"}
+        }
         for event in store.list_provider_events()
         if event.get("provider") == "razorpay"
     ]

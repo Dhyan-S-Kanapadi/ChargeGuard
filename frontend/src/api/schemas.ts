@@ -233,6 +233,7 @@ export const ProviderEventSchema = z.object({
 
 export const SimulatorDisputeSchema = z.object({
   dispute_id: z.string(),
+  scenario_id: z.string().optional(),
   merchant_id: z.string(),
   order_id: z.string(),
   payment_id: z.string(),
@@ -246,6 +247,38 @@ export const SimulatorDisputeSchema = z.object({
   network_reason_code: z.string().nullable().optional(),
 }).passthrough();
 
+export const SimulationScenarioSchema = z.object({
+  id: z.string(),
+  family: z.string(),
+  title: z.string(),
+  description: z.string(),
+  expected: z.string(),
+  behavior: z.string(),
+  payload: z.object({
+    payment_amount_paise: z.number(),
+    dispute_amount_paise: z.number(),
+    currency: z.string(),
+    method: z.enum(["card", "upi", "netbanking", "wallet"]),
+    card_network: z.string().nullable(),
+    network_reason_code: z.string().nullable(),
+    razorpay_reason_code: z.string(),
+    respond_within_hours: z.number(),
+  }).passthrough(),
+});
+
+export const SimulationRunResultSchema = z.object({
+  scenario_id: z.string(),
+  dispute_id: z.string(),
+  order_seeded: z.boolean(),
+  expected: z.string(),
+  deliveries: z.array(z.object({
+    event_id: z.string(),
+    event_name: z.string(),
+    delivery: z.object({ status_code: z.number(), body: z.string().optional() }).passthrough(),
+    payload_sha256: z.string(),
+  })),
+});
+
 export type Health = z.infer<typeof HealthSchema>;
 export type Merchant = z.infer<typeof MerchantSchema>;
 export type PaymentConnector = z.infer<typeof PaymentConnectorSchema>;
@@ -257,3 +290,5 @@ export type ClassificationSuggestion = z.infer<typeof ClassificationSuggestionSc
 export type Stats = z.infer<typeof StatsSchema>;
 export type ProviderEvent = z.infer<typeof ProviderEventSchema>;
 export type SimulatorDispute = z.infer<typeof SimulatorDisputeSchema>;
+export type SimulationScenario = z.infer<typeof SimulationScenarioSchema>;
+export type SimulationRunResult = z.infer<typeof SimulationRunResultSchema>;
