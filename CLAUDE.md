@@ -113,6 +113,7 @@ orchestrator
   -> optional delivery_photo_evidence
   -> optional order_timeline_evidence
   -> scoring
+  -> decision_review
 ```
 
 Food-delivery and quick-commerce cases can use the two additional food evidence nodes.
@@ -126,6 +127,7 @@ orchestrator
   -> expedited_transaction_evidence
   -> expedited_shipping_evidence
   -> scoring
+  -> decision_review
 ```
 
 The scoring reasoning must identify this as an expedited partial-evidence decision.
@@ -247,6 +249,8 @@ LLM features are additive and must remain outside deterministic decisioning:
 - read-only portfolio assistant.
 
 LLM output must not alter `win_probability`, `expected_value`, or `decision`. Keep calls deterministic, grounded in redacted case data, and fail safely when unavailable. Do not claim that Gmail/Freshdesk retrieval requires an LLM; those integrations retrieve structured records directly and optional LLM features summarize or narrate afterward.
+
+The optional OpenAI-compatible decision review runs after scoring and before decision routing. It receives only allowlisted normalized facts and stores a bounded advisory recommendation. Routing always uses the pre-existing deterministic `decision`; disabled, malformed, timed-out, or unavailable reviews do not degrade or fail the workflow.
 
 ## API Surface And Authentication
 

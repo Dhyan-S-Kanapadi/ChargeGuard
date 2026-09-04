@@ -61,6 +61,20 @@ _MERCHANT_SECRET_KEYS = (
     "woocommerce_api_key",
     "woocommerce_api_secret",
 )
+_LLM_REVIEW_SAFE_KEYS = (
+    "status",
+    "recommendation",
+    "confidence",
+    "summary",
+    "supporting_factors",
+    "opposing_factors",
+    "missing_evidence",
+    "risk_flags",
+    "agreement_with_engine",
+    "model",
+    "generated_at",
+    "error_code",
+)
 
 
 def _redact_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -81,6 +95,14 @@ def _redact_state(state: dict[str, Any]) -> dict[str, Any]:
             merchant.pop(key, None)
     redacted.pop("disputed_order_ip", None)
     redacted.pop("disputed_order_user_agent", None)
+
+    review = redacted.get("llm_decision_review")
+    if isinstance(review, dict):
+        redacted["llm_decision_review"] = {
+            key: review[key] for key in _LLM_REVIEW_SAFE_KEYS if key in review
+        }
+    elif review is not None:
+        redacted.pop("llm_decision_review", None)
 
     return redacted
 

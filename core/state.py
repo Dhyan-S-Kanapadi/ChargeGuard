@@ -98,6 +98,21 @@ class ClassificationSuggestion(TypedDict):
     resolved_by_actor_id: NotRequired[str]
 
 
+class LLMDecisionReview(TypedDict):
+    status: Literal["completed", "unavailable", "disabled"]
+    recommendation: Literal["FIGHT", "ACCEPT", "ESCALATE_DEGRADED"] | None
+    confidence: float | None
+    summary: str | None
+    supporting_factors: list[str]
+    opposing_factors: list[str]
+    missing_evidence: list[str]
+    risk_flags: list[str]
+    agreement_with_engine: bool | None
+    model: str | None
+    generated_at: datetime | None
+    error_code: str | None
+
+
 class TransactionEvidence(TypedDict):
     order_id: str
     payment_id: str
@@ -248,6 +263,7 @@ class ChargebackState(TypedDict):
     requires_human_review: NotRequired[bool]
     decision: Optional[Literal["FIGHT", "ACCEPT", "ESCALATE_DEGRADED"]]
     decision_reasoning: Optional[str]
+    llm_decision_review: NotRequired[LLMDecisionReview]
 
     # Response
     rebuttal_document_path: Optional[str]

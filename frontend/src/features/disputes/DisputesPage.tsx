@@ -9,7 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import type { DisputeDetail } from "../../api/schemas";
+import type { DisputeDetail, DisputeState } from "../../api/schemas";
 import { useConnection } from "../../app/ConnectionContext";
 import {
   Badge,
@@ -156,6 +156,7 @@ function DetailDrawer({ id, close, invalidate }: { id: string; close: () => void
         {classificationSuggestionEligible(detail.data) ? <ClassificationAssistant item={detail.data} onChanged={async () => { await Promise.all([detail.refetch(), invalidate()]); }} /> : null}
         <dl className="detail-grid"><Field label="Processing status" value={detail.data.status} /><Field label="Network outcome" value={detail.data.state.final_outcome ?? "Not adjudicated"} /><Field label="Confidence" value={formatPercent(detail.data.state.win_probability)} /><Field label="Expected value" value={detail.data.state.expected_value == null ? "Unavailable" : formatMoney(detail.data.state.expected_value, detail.data.state.currency)} /><Field label="Filing deadline" value={formatDate(detail.data.state.filing_deadline)} /><Field label="Filed at" value={formatDate(detail.data.state.filed_at)} /><Field label="Merchant" value={detail.data.state.merchant_profile.name} /><Field label="Reason" value={detail.data.state.provider_reason_code || detail.data.state.reason_code} /><Field label="Payment ID" value={detail.data.state.payment_id ?? "Unavailable"} /><Field label="Order ID" value={detail.data.state.order_id ?? "Unavailable"} /></dl>
         <Section title="Decision reasoning" value={detail.data.state.decision_reasoning} />
+        <DecisionReviewCard state={detail.data.state} />
         <Section title="Contradiction summary" value={detail.data.state.contradiction_summary} />
         <Panel title="Evidence checklist">{["transaction", "shipping", "comms", "device", "consortium", "delivery_photo", "order_timeline"].map((key) => <span className="check-item" key={key}>{detail.data!.state[key as keyof typeof detail.data.state] ? "✓" : "—"} {key.replaceAll("_", " ")}</span>)}</Panel>
         <Panel title="Human review summary" action={<Button variant="secondary" onClick={() => void summary.refetch()} loading={summary.isFetching}><FileText />Generate</Button>}>{summary.error ? <ErrorState error={summary.error} retry={() => void summary.refetch()} /> : <p>{summary.data?.human_review_summary ?? detail.data.state.human_review_summary ?? "Generate a grounded summary when needed."}</p>}</Panel>
@@ -166,6 +167,39 @@ function DetailDrawer({ id, close, invalidate }: { id: string; close: () => void
     </aside>
     <ConfirmDialog open={Boolean(confirm)} title="Confirm final network outcome" confirmLabel={`Record ${confirm}`} danger={confirm === "LOSS"} pending={outcome.isPending} onClose={() => setConfirm("")} onConfirm={() => outcome.mutate(confirm as "WIN" | "LOSS")}><p>Case <strong>{id}</strong> will be recorded as <strong>{confirm}</strong>. This cannot be replaced by a conflicting outcome.</p><label>Reason (optional)<textarea value={reason} onChange={(event) => setReason(event.target.value)} maxLength={2000} /></label></ConfirmDialog>
   </>;
+}
+
+export function DecisionReviewCard({ state }: { state: DisputeState }) {
+  const review = state.llm_decision_review;
+  if (!review) return null;
+  if (review.status === "disabled") {
+    return <Panel title="AI Decision Review" className="decision-review"><p className="muted">AI decision review is disabled.</p></Panel>;
+  }
+  if (review.status === "unavailable") {
+    return <Panel title="AI Decision Review" className="decision-review"><p className="warning-box">AI review unavailable. ChargeGuard’s deterministic decision was preserved.</p></Panel>;
+  }
+
+  return <Panel title="AI Decision Review" className="decision-review">
+    <p className="assistant-notice"><Sparkles />Advisory analysis only — this AI review cannot alter or file the dispute.</p>
+    <div className="decision-review__comparison">
+      <span><small>ChargeGuard final decision</small><Badge tone={recommendationTone(state.decision)}>{state.decision}</Badge></span>
+      <span><small>LLM advisory recommendation</small><Badge tone={recommendationTone(review.recommendation)}>{review.recommendation}</Badge></span>
+      <span><small>Comparison</small><Badge tone={review.agreement_with_engine ? "success" : "warning"}>{review.agreement_with_engine ? "Agreement" : "Disagreement"}</Badge></span>
+      <span><small>LLM confidence</small><strong>{formatPercent(review.confidence)}</strong></span>
+    </div>
+    <p>{review.summary}</p>
+    <div className="decision-review__factors">
+      <ReviewFactors title="Supporting evidence" values={review.supporting_factors} />
+      <ReviewFactors title="Opposing evidence" values={review.opposing_factors} />
+      <ReviewFactors title="Missing evidence" values={review.missing_evidence} />
+      <ReviewFactors title="Risk flags" values={review.risk_flags} />
+    </div>
+    <small>Model: {review.model ?? "Unavailable"} · Generated: {formatDate(review.generated_at)}</small>
+  </Panel>;
+}
+
+function ReviewFactors({ title, values }: { title: string; values: string[] }) {
+  return <section><h3>{title}</h3>{values.length ? <ul>{values.map((value) => <li key={value}>{value}</li>)}</ul> : <p className="muted">None identified.</p>}</section>;
 }
 
 export function ClassificationAssistant({ item, onChanged }: { item: DisputeDetail; onChanged: () => Promise<void> }) {
