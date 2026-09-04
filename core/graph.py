@@ -4,6 +4,7 @@ from typing import Literal
 from langgraph.graph import END, StateGraph
 
 from agents.acceptance import accept_and_log_agent
+from agents.decision_review import decision_review_agent
 from agents.evidence.comms import comms_agent
 from agents.evidence.consortium import consortium_agent
 from agents.evidence.delivery_photo import delivery_photo_agent
@@ -87,6 +88,7 @@ def build_graph():
     graph.add_node("order_timeline_evidence", order_timeline_agent)
     graph.add_node("purchase_history_evidence", purchase_history_agent)
     graph.add_node("scoring", scoring_agent)
+    graph.add_node("decision_review", decision_review_agent)
     graph.add_node("rebuttal_builder", rebuttal_builder_agent)
     graph.add_node("quality_check", quality_check_agent)
     graph.add_node("filing", filing_agent)
@@ -131,8 +133,9 @@ def build_graph():
         {"ce3": "purchase_history_evidence", "standard": "scoring"},
     )
     graph.add_edge("purchase_history_evidence", "scoring")
+    graph.add_edge("scoring", "decision_review")
     graph.add_conditional_edges(
-        "scoring",
+        "decision_review",
         route_decision,
         {
             "FIGHT": "rebuttal_builder",

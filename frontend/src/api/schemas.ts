@@ -93,6 +93,21 @@ export const ClassificationSuggestionSchema = z.object({
   unavailability_reason: z.string().nullable().optional(),
 });
 
+export const LLMDecisionReviewSchema = z.object({
+  status: z.enum(["completed", "unavailable", "disabled"]),
+  recommendation: z.enum(["FIGHT", "ACCEPT", "ESCALATE_DEGRADED"]).nullable(),
+  confidence: z.number().min(0).max(1).nullable(),
+  summary: z.string().nullable(),
+  supporting_factors: z.array(z.string()),
+  opposing_factors: z.array(z.string()),
+  missing_evidence: z.array(z.string()),
+  risk_flags: z.array(z.string()),
+  agreement_with_engine: z.boolean().nullable(),
+  model: z.string().nullable(),
+  generated_at: z.string().nullable(),
+  error_code: z.string().nullable(),
+});
+
 const ScoreSchema = z.object({
   score: z.number(),
   label: z.string(),
@@ -142,6 +157,7 @@ export const DisputeStateSchema = z.object({
   identity_continuity: ScoreSchema.nullable().optional(),
   contradiction_summary: z.string().nullable().optional(),
   human_review_summary: z.string().nullable().optional(),
+  llm_decision_review: LLMDecisionReviewSchema.optional(),
   classification_suggestion: ClassificationSuggestionSchema.extend({
     model: z.string().optional(),
     prompt_schema_version: z.string().optional(),

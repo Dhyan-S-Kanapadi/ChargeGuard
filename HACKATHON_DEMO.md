@@ -41,6 +41,8 @@ Merchant evidence is fragmented across payment, commerce, shipping, support, and
 
 ChargeGuard receives a normalized internal event or signed Razorpay webhook. LangGraph coordinates evidence agents through one shared `ChargebackState`; agents do not independently message one another.
 
+Evidence agents collect normalized facts, then deterministic ML and expected value produce the authoritative decision. When configured, an open-weight LLM independently reviews and explains that result. A disagreement is shown to the operator but cannot change routing or file the dispute; human review remains available. The LLM acts as the dispute analyst, while the deterministic decision engine acts as the financial risk controller.
+
 ### 1:05-2:35 — FIGHT
 
 Run the demo and open the generated high-value case. Show transaction and delivery evidence, win probability, expected value, decision reasoning, quality approval, and the rebuttal path. State that the current filing confirmation is local and not a real Razorpay submission.
@@ -70,6 +72,7 @@ Safe claims:
 - Signed Razorpay-shaped webhook simulation with idempotency and ordering protection.
 - Merchant-scoped encrypted Razorpay/Stripe and SEON connector infrastructure.
 - Human-reviewed optional LLM classification assistance.
+- Optional advisory open-weight LLM decision review that cannot change or file a dispute.
 
 Do not claim:
 

@@ -74,6 +74,15 @@ def _print_result(dispute: dict[str, Any]) -> None:
         f"{_format_subscore(dispute.get('identity_continuity'))}"
     )
     print(f"  contradiction flags: {'; '.join(flags) if flags else 'none'}")
+    review = state.get("llm_decision_review") or {}
+    if review.get("status") == "completed":
+        agreement = "agrees" if review.get("agreement_with_engine") else "disagrees"
+        print(
+            "  AI advisory review: "
+            f"{review.get('recommendation')} ({review.get('confidence')}, {agreement})"
+        )
+    elif review.get("status") == "unavailable":
+        print("  AI advisory review: unavailable; deterministic decision preserved")
     print(f"  final outcome: {state.get('final_outcome')}")
 
 

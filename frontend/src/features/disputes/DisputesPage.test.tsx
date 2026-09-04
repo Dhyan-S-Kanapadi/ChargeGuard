@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DisputeDetail } from "../../api/schemas";
 import {
   ClassificationAssistant,
+  DecisionReviewCard,
   classificationSuggestionEligible,
   outcomeEligible,
 } from "./DisputesPage";
@@ -76,6 +77,69 @@ describe("outcome eligibility", () => {
     expect(outcomeEligible(outcome)).toBe(true);
     expect(outcomeEligible({ ...outcome, state: { ...outcome.state, decision: "ACCEPT" } })).toBe(false);
     expect(outcomeEligible({ ...outcome, state: { ...outcome.state, final_outcome: "WIN" } })).toBe(false);
+  });
+});
+
+describe("AI decision review", () => {
+  const reviewState = {
+    ...outcome.state,
+    llm_decision_review: {
+      status: "completed" as const,
+      recommendation: "FIGHT" as const,
+      confidence: 0.86,
+      summary: "Authenticated payment and delivery evidence support contesting.",
+      supporting_factors: ["OTP authentication is present"],
+      opposing_factors: ["No qualifying history"],
+      missing_evidence: [],
+      risk_flags: [],
+      agreement_with_engine: true,
+      model: "open-weight-demo",
+      generated_at: "2030-01-01T00:00:00Z",
+      error_code: null,
+    },
+  } as unknown as DisputeDetail["state"];
+
+  it("renders a completed advisory review", () => {
+    render(<DecisionReviewCard state={reviewState} />);
+
+    expect(screen.getByText("AI Decision Review")).toBeInTheDocument();
+    expect(screen.getByText(/Advisory analysis only/)).toBeInTheDocument();
+    expect(screen.getByText("Agreement")).toBeInTheDocument();
+    expect(screen.getByText("86.0%")).toBeInTheDocument();
+    expect(screen.getByText("OTP authentication is present")).toBeInTheDocument();
+    expect(screen.getByText(/open-weight-demo/)).toBeInTheDocument();
+  });
+
+  it("prominently renders disagreement without changing the final decision", () => {
+    const state = {
+      ...reviewState,
+      decision: "ACCEPT" as const,
+      llm_decision_review: {
+        ...reviewState.llm_decision_review!,
+        agreement_with_engine: false,
+      },
+    };
+    render(<DecisionReviewCard state={state} />);
+
+    expect(screen.getByText("Disagreement")).toBeInTheDocument();
+    expect(screen.getByText("ACCEPT")).toBeInTheDocument();
+    expect(screen.getByText("FIGHT")).toBeInTheDocument();
+  });
+
+  it("renders the safe unavailable state", () => {
+    const state = {
+      ...reviewState,
+      llm_decision_review: {
+        ...reviewState.llm_decision_review!,
+        status: "unavailable" as const,
+        recommendation: null,
+        confidence: null,
+        agreement_with_engine: null,
+      },
+    };
+    render(<DecisionReviewCard state={state} />);
+
+    expect(screen.getByText("AI review unavailable. ChargeGuard’s deterministic decision was preserved.")).toBeInTheDocument();
   });
 });
 

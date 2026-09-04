@@ -40,3 +40,27 @@ def test_demo_requires_healthy_stub_target(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="CHARGEGUARD_USE_STUBS=true"):
         demo._require_ready_server()
+
+
+def test_demo_prints_advisory_review_without_changing_decision(capsys) -> None:
+    dispute = _dispute("FIGHT")
+    dispute["state"].update(
+        {
+            "currency": "INR",
+            "win_probability": 0.8,
+            "expected_value": 100.0,
+            "final_outcome": None,
+            "llm_decision_review": {
+                "status": "completed",
+                "recommendation": "ACCEPT",
+                "confidence": 0.7,
+                "agreement_with_engine": False,
+            },
+        }
+    )
+
+    demo._print_result(dispute)
+
+    output = capsys.readouterr().out
+    assert "decision: FIGHT" in output
+    assert "AI advisory review: ACCEPT (0.7, disagrees)" in output
