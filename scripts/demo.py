@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Run the three ChargeGuard decision-path demonstrations against a local API."""
+"""Run the three ChargeGuard decision paths against local or deployed APIs."""
 
 import json
 import os
+import re
 import sys
 import time
+from secrets import token_hex
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -14,7 +16,13 @@ from urllib.request import Request, urlopen
 BASE_URL = os.getenv("CHARGEGUARD_API_URL", "http://127.0.0.1:8000").rstrip("/")
 API_KEY = os.getenv("API_KEY")
 POLL_INTERVAL_SECONDS = 0.5
-POLL_TIMEOUT_SECONDS = 45
+POLL_TIMEOUT_SECONDS = 60
+RUN_ID = re.sub(
+    r"[^A-Za-z0-9_-]",
+    "-",
+    os.getenv("CHARGEGUARD_DEMO_RUN_ID", "").strip(),
+)[:32] or f"{datetime.now(timezone.utc):%Y%m%d%H%M%S}_{token_hex(2)}"
+MERCHANT_ID = f"merchant_demo_{RUN_ID}"
 
 
 def _request(method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -69,6 +77,16 @@ def _print_result(dispute: dict[str, Any]) -> None:
     print(f"  final outcome: {state.get('final_outcome')}")
 
 
+def _require_decision(dispute: dict[str, Any], expected: str) -> None:
+    actual = dispute["state"].get("decision")
+    if actual != expected:
+        reasons = dispute["state"].get("degraded_reasons") or []
+        raise RuntimeError(
+            f"Expected {expected}, received {actual}. "
+            f"Degraded reasons: {', '.join(reasons) if reasons else 'none'}"
+        )
+
+
 def _webhook_payload(chargeback_id: str, amount: float, *, simulate_degraded: bool = False) -> dict[str, Any]:
     return {
         "chargeback_id": chargeback_id,
@@ -77,7 +95,7 @@ def _webhook_payload(chargeback_id: str, amount: float, *, simulate_degraded: bo
         "dispute_amount": amount,
         "currency": "USD",
         "filing_deadline": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
-        "merchant_id": "merchant_demo",
+        "merchant_id": MERCHANT_ID,
         "order_id": f"order_{chargeback_id}",
         "payment_id": f"pay_{chargeback_id}",
         "tracking_id": f"tracking_{chargeback_id}",
@@ -88,24 +106,32 @@ def _webhook_payload(chargeback_id: str, amount: float, *, simulate_degraded: bo
 
 def _require_ready_server() -> None:
     if not API_KEY:
-        raise RuntimeError("Set API_KEY to a valid local API key before running this demo.")
+        raise RuntimeError("Set API_KEY to the key configured on the target ChargeGuard API.")
     health = _request("GET", "/health")
+    if health.get("status") != "ok":
+        raise RuntimeError(f"The target API is not healthy: {health}")
     if not health.get("model_loaded"):
         raise RuntimeError(
-            "The local API has no loaded model. Train one with `poetry run python -m ml.train` "
+            "The target API has no loaded model. Train one with `poetry run python -m ml.train` "
             "and restart the server."
+        )
+    if not health.get("stub_mode"):
+        raise RuntimeError(
+            "This deterministic demo requires CHARGEGUARD_USE_STUBS=true on the target API."
         )
 
 
 def main() -> int:
     try:
         _require_ready_server()
-        print("Creating the demo merchant.")
+        print(f"Target: {BASE_URL}")
+        print(f"Demo run: {RUN_ID}")
+        print("Creating an isolated demo merchant.")
         _request(
             "POST",
             "/merchants",
             {
-                "merchant_id": "merchant_demo",
+                "merchant_id": MERCHANT_ID,
                 "name": "ChargeGuard Demo Store",
                 "vertical": "ecommerce",
                 "payment_provider": "stripe",
@@ -117,26 +143,35 @@ def main() -> int:
         )
 
         print("\nDemonstrating a high-value authenticated and delivered case: expect FIGHT.")
-        _request("POST", "/webhook/chargeback", _webhook_payload("cb_demo_fight", 1_000.0))
-        fight = _wait_for_decision("cb_demo_fight")
+        fight_id = f"cb_demo_fight_{RUN_ID}"
+        accept_id = f"cb_demo_accept_{RUN_ID}"
+        escalate_id = f"cb_demo_escalate_{RUN_ID}"
+
+        _request("POST", "/webhook/chargeback", _webhook_payload(fight_id, 1_000.0))
+        fight = _wait_for_decision(fight_id)
+        _require_decision(fight, "FIGHT")
         _print_result(fight)
 
         print("\nDemonstrating the same evidence on a low-value case: expect ACCEPT.")
-        _request("POST", "/webhook/chargeback", _webhook_payload("cb_demo_accept", 10.0))
-        accept = _wait_for_decision("cb_demo_accept")
+        _request("POST", "/webhook/chargeback", _webhook_payload(accept_id, 10.0))
+        accept = _wait_for_decision(accept_id)
+        _require_decision(accept, "ACCEPT")
         _print_result(accept)
 
         print("\nDemonstrating the degraded-evidence human-review path: expect ESCALATE_DEGRADED.")
         _request(
             "POST",
             "/webhook/chargeback",
-            _webhook_payload("cb_demo_escalate", 1_000.0, simulate_degraded=True),
+            _webhook_payload(escalate_id, 1_000.0, simulate_degraded=True),
         )
-        escalate = _wait_for_decision("cb_demo_escalate")
+        escalate = _wait_for_decision(escalate_id)
+        _require_decision(escalate, "ESCALATE_DEGRADED")
         _print_result(escalate)
 
         pdf_path = fight["state"].get("rebuttal_document_path")
         print(f"\nFIGHT rebuttal PDF: {pdf_path or 'not generated'}")
+        print(f"Dashboard: {BASE_URL}/dashboard/")
+        print("Demo completed: FIGHT, ACCEPT, and ESCALATE_DEGRADED all passed.")
         return 0
     except RuntimeError as error:
         print(f"Demo failed: {error}", file=sys.stderr)
