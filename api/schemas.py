@@ -82,6 +82,7 @@ class MerchantResponse(BaseModel):
     payment_provider: str | None = None
     payment_connector_id: str | None = None
     payment_connector_ids: dict[str, str] = Field(default_factory=dict)
+    device_risk_connector_id: str | None = None
     razorpay_account_id: str | None = None
     shipping_provider: str | None = None
     support_connector_ref: str | None = None
@@ -148,6 +149,33 @@ class PaymentConnectorResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     last_error_code: str | None = None
+
+
+class SeonConnectorCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str = Field(min_length=8, max_length=500)
+
+    @field_validator("api_key")
+    @classmethod
+    def strip_api_key(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped or any(character.isspace() for character in stripped):
+            raise ValueError("SEON API key must not contain whitespace.")
+        return stripped
+
+
+class DeviceRiskConnectorResponse(BaseModel):
+    connector_id: str
+    merchant_id: str
+    provider: Literal["seon"]
+    status: Literal["verification_pending", "verified", "invalid", "disconnected"]
+    credential_hint: str
+    verified_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_error_code: str | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class OrderIngestRequest(BaseModel):

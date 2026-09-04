@@ -3,11 +3,23 @@ import math
 import os
 from typing import Any
 
+import httpx
+
+from api.store import store
 from core.state import ChargebackState, DeviceEvidence
-from integrations.seon import SeonClient, SeonConfigError
+from integrations.credential_secrets import (
+    CredentialStoreError,
+    credential_secret_store_from_env,
+)
+from integrations.device_risk_client_factory import (
+    DeviceRiskClientFactory,
+    DeviceRiskConnectorError,
+)
+from integrations.seon import SeonConfigError, SeonRequestError
 
 
 logger = logging.getLogger(__name__)
+device_risk_client_factory = DeviceRiskClientFactory(store)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -141,8 +153,86 @@ def _build_device_evidence(
             or bool(login.get("is_normal"))
         ),
         "vpn_detected": bool(vpn),
-        "raw": {"source": source, "risk": risk},
+        "raw": {"source": source},
     }
+
+
+def _record_seon_success(state: ChargebackState) -> None:
+    merchant = state["merchant_profile"]
+    pending = next(
+        (
+            item
+            for item in store.list_device_risk_connectors(merchant["merchant_id"])
+            if item["status"] == "verification_pending"
+        ),
+        None,
+    )
+    connector_id = (
+        pending["connector_id"]
+        if pending
+        else merchant.get("device_risk_connector_id")
+    )
+    if not connector_id:
+        return
+    activated = store.activate_device_risk_connector(merchant["merchant_id"], connector_id)
+    if activated is None:
+        return
+    _, previous_id = activated
+    if previous_id:
+        try:
+            credential_secret_store_from_env().delete(previous_id)
+        except CredentialStoreError as exc:
+            logger.error(
+                "Unable to remove rotated device-risk connector secret",
+                extra={
+                    "merchant_id": merchant["merchant_id"],
+                    "connector_id": previous_id,
+                    "error_code": exc.code,
+                },
+            )
+
+
+def _record_seon_failure(
+    state: ChargebackState,
+    error_code: str,
+    *,
+    invalid: bool,
+) -> None:
+    merchant = state["merchant_profile"]
+    pending = next(
+        (
+            item
+            for item in store.list_device_risk_connectors(merchant["merchant_id"])
+            if item["status"] == "verification_pending"
+        ),
+        None,
+    )
+    connector_id = (
+        pending["connector_id"]
+        if pending
+        else merchant.get("device_risk_connector_id")
+    )
+    if not connector_id:
+        return
+    store.update_device_risk_connector_status(
+        merchant["merchant_id"],
+        connector_id,
+        status="invalid" if invalid else None,
+        last_error_code=error_code,
+        audit_action="authentication_failed" if invalid else "request_failed",
+    )
+    if invalid:
+        try:
+            credential_secret_store_from_env().delete(connector_id)
+        except CredentialStoreError as exc:
+            logger.error(
+                "Unable to remove invalid device-risk connector secret",
+                extra={
+                    "merchant_id": merchant["merchant_id"],
+                    "connector_id": connector_id,
+                    "error_code": exc.code,
+                },
+            )
 
 
 def _collect_seon(state: ChargebackState) -> dict[str, Any]:
@@ -157,9 +247,29 @@ def _collect_seon(state: ChargebackState) -> dict[str, Any]:
         "amount": state["dispute_amount"],
         "currency": state["currency"],
     }
-    response = SeonClient.from_env().fraud_check(payload)
+    try:
+        response = device_risk_client_factory.for_merchant(
+            state["merchant_profile"]
+        ).fraud_check(payload)
+    except SeonRequestError as exc:
+        _record_seon_failure(
+            state,
+            "provider_authentication_failed"
+            if exc.status_code in {401, 403}
+            else "provider_request_failed",
+            invalid=exc.status_code in {401, 403},
+        )
+        raise
+    except httpx.TimeoutException:
+        _record_seon_failure(state, "provider_timeout", invalid=False)
+        raise
+    except httpx.HTTPError:
+        _record_seon_failure(state, "provider_unavailable", invalid=False)
+        raise
     if response.get("success") is False:
-        raise RuntimeError(f"SEON rejected fraud check: {response.get('error', 'unknown error')}")
+        _record_seon_failure(state, "provider_response_unsuccessful", invalid=False)
+        raise SeonRequestError("seon_response_unsuccessful")
+    _record_seon_success(state)
     return response
 
 
@@ -175,7 +285,7 @@ def device_agent(state: ChargebackState) -> ChargebackState:
     try:
         risk, source = _collect_device_data(state)
         state["device"] = _build_device_evidence(risk, state=state, source=source)
-    except SeonConfigError:
+    except (SeonConfigError, DeviceRiskConnectorError, CredentialStoreError):
         logger.warning("SEON credentials are unavailable")
         state["device"] = None
         state["evidence_collection_degraded"] = True

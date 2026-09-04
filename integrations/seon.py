@@ -15,6 +15,11 @@ class SeonConfigError(RuntimeError):
 class SeonRequestError(RuntimeError):
     """Raised when SEON returns an error response."""
 
+    def __init__(self, code: str, *, status_code: int | None = None) -> None:
+        self.code = code
+        self.status_code = status_code
+        super().__init__(code)
+
 
 class SeonClient:
     """Small SEON API client for device and fraud-risk evidence."""
@@ -65,6 +70,13 @@ class SeonClient:
         )
         if response.status_code >= 400:
             raise SeonRequestError(
-                f"SEON request failed with {response.status_code}: {response.text}"
+                "seon_request_failed",
+                status_code=response.status_code,
             )
-        return response.json()
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise SeonRequestError(
+                "seon_response_invalid",
+                status_code=response.status_code,
+            ) from exc

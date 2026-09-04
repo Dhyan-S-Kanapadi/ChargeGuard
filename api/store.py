@@ -9,6 +9,7 @@ from typing import Any
 from core.state import (
     ClassificationSuggestion,
     ChargebackState,
+    DeviceRiskConnector,
     MerchantProfile,
     OrderRecord,
     PaymentConnector,
@@ -79,6 +80,8 @@ class InMemoryStore:
         self._merchants: dict[str, MerchantProfile] = {}
         self._payment_connectors: dict[str, PaymentConnector] = {}
         self._payment_connector_audit: list[dict[str, Any]] = []
+        self._device_risk_connectors: dict[str, DeviceRiskConnector] = {}
+        self._device_risk_connector_audit: list[dict[str, Any]] = []
         self._orders: dict[str, OrderRecord] = {}
         self._disputes: dict[str, dict[str, Any]] = {}
         self._provider_events: dict[str, dict[str, Any]] = {}
@@ -94,6 +97,8 @@ class InMemoryStore:
             self._merchants.clear()
             self._payment_connectors.clear()
             self._payment_connector_audit.clear()
+            self._device_risk_connectors.clear()
+            self._device_risk_connector_audit.clear()
             self._orders.clear()
             self._disputes.clear()
             self._provider_events.clear()
@@ -375,6 +380,215 @@ class InMemoryStore:
                 "created_at": datetime.now(timezone.utc),
                 "status": connector["status"],
                 "error_code": connector["last_error_code"],
+            }
+        )
+
+    def configure_device_risk_connector(
+        self,
+        connector: DeviceRiskConnector,
+    ) -> bool:
+        """Persist a SEON candidate for its first real request."""
+        with self._lock:
+            merchant = self._merchants.get(connector["merchant_id"])
+            if merchant is None:
+                raise KeyError(connector["merchant_id"])
+            if connector["connector_id"] in self._device_risk_connectors:
+                return False
+            merchants_before = deepcopy(self._merchants)
+            connectors_before = deepcopy(self._device_risk_connectors)
+            audit_before = deepcopy(self._device_risk_connector_audit)
+            previous_id = merchant.get("device_risk_connector_id")
+            try:
+                self._device_risk_connectors[connector["connector_id"]] = deepcopy(
+                    connector
+                )
+                previous = self._device_risk_connectors.get(previous_id or "")
+                if previous is None or previous["status"] != "verified":
+                    merchant["device_risk_connector_id"] = connector["connector_id"]
+                self._append_device_risk_audit(
+                    connector,
+                    "rotation_configured" if previous_id else "configured",
+                )
+                self._save()
+            except Exception:
+                self._merchants = merchants_before
+                self._device_risk_connectors = connectors_before
+                self._device_risk_connector_audit = audit_before
+                raise
+            return True
+
+    def get_device_risk_connector(
+        self,
+        merchant_id: str,
+        connector_id: str,
+    ) -> DeviceRiskConnector | None:
+        with self._lock:
+            connector = self._device_risk_connectors.get(connector_id)
+            if connector is None or connector["merchant_id"] != merchant_id:
+                return None
+            return deepcopy(connector)
+
+    def list_device_risk_connectors(self, merchant_id: str) -> list[DeviceRiskConnector]:
+        with self._lock:
+            connectors = [
+                deepcopy(item)
+                for item in self._device_risk_connectors.values()
+                if item["merchant_id"] == merchant_id
+            ]
+        return sorted(connectors, key=lambda item: item["created_at"], reverse=True)
+
+    def activate_device_risk_connector(
+        self,
+        merchant_id: str,
+        connector_id: str,
+    ) -> tuple[DeviceRiskConnector, str | None] | None:
+        """Mark a successful SEON candidate verified and rotate atomically."""
+        with self._lock:
+            merchant = self._merchants.get(merchant_id)
+            connector = self._device_risk_connectors.get(connector_id)
+            if (
+                merchant is None
+                or connector is None
+                or connector["merchant_id"] != merchant_id
+            ):
+                return None
+            merchants_before = deepcopy(self._merchants)
+            connectors_before = deepcopy(self._device_risk_connectors)
+            audit_before = deepcopy(self._device_risk_connector_audit)
+            now = datetime.now(timezone.utc)
+            was_pending = connector["status"] == "verification_pending"
+            previous = next(
+                (
+                    item
+                    for item in self._device_risk_connectors.values()
+                    if item["merchant_id"] == merchant_id
+                    and item["connector_id"] != connector_id
+                    and item["status"] == "verified"
+                ),
+                None,
+            )
+            previous_id = previous["connector_id"] if previous else None
+            if previous is not None:
+                previous["status"] = "disconnected"
+                previous["updated_at"] = now
+                self._append_device_risk_audit(previous, "rotated_out")
+            connector["status"] = "verified"
+            connector["verified_at"] = connector.get("verified_at") or now
+            connector["last_success_at"] = now
+            connector["last_error_code"] = None
+            connector["updated_at"] = now
+            merchant["device_risk_connector_id"] = connector_id
+            self._append_device_risk_audit(
+                connector,
+                ("rotated" if previous_id else "verified")
+                if was_pending
+                else "request_succeeded",
+            )
+            try:
+                self._save()
+            except Exception:
+                self._merchants = merchants_before
+                self._device_risk_connectors = connectors_before
+                self._device_risk_connector_audit = audit_before
+                raise
+            return deepcopy(connector), previous_id
+
+    def update_device_risk_connector_status(
+        self,
+        merchant_id: str,
+        connector_id: str,
+        *,
+        status: str | None = None,
+        last_error_code: str | None,
+        audit_action: str,
+    ) -> DeviceRiskConnector | None:
+        with self._lock:
+            connector = self._device_risk_connectors.get(connector_id)
+            if connector is None or connector["merchant_id"] != merchant_id:
+                return None
+            if status is not None and status not in {
+                "verification_pending", "verified", "invalid", "disconnected"
+            }:
+                raise ValueError("Invalid device-risk connector status.")
+            merchants_before = deepcopy(self._merchants)
+            connectors_before = deepcopy(self._device_risk_connectors)
+            audit_before = deepcopy(self._device_risk_connector_audit)
+            if status is not None:
+                connector["status"] = status  # type: ignore[typeddict-item]
+            connector["last_error_code"] = last_error_code
+            connector["updated_at"] = datetime.now(timezone.utc)
+            if connector["status"] in {"invalid", "disconnected"}:
+                self._detach_device_risk_connector(connector)
+            self._append_device_risk_audit(connector, audit_action)
+            try:
+                self._save()
+            except Exception:
+                self._merchants = merchants_before
+                self._device_risk_connectors = connectors_before
+                self._device_risk_connector_audit = audit_before
+                raise
+            return deepcopy(connector)
+
+    def disconnect_device_risk_connector(
+        self,
+        merchant_id: str,
+        connector_id: str,
+    ) -> DeviceRiskConnector | None:
+        return self.update_device_risk_connector_status(
+            merchant_id,
+            connector_id,
+            status="disconnected",
+            last_error_code=None,
+            audit_action="disconnected",
+        )
+
+    def list_device_risk_connector_audit(
+        self,
+        merchant_id: str,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            return [
+                deepcopy(item)
+                for item in self._device_risk_connector_audit
+                if item["merchant_id"] == merchant_id
+            ]
+
+    def _detach_device_risk_connector(self, connector: DeviceRiskConnector) -> None:
+        merchant = self._merchants.get(connector["merchant_id"])
+        if (
+            merchant is None
+            or merchant.get("device_risk_connector_id") != connector["connector_id"]
+        ):
+            return
+        replacement = max(
+            (
+                item
+                for item in self._device_risk_connectors.values()
+                if item["merchant_id"] == connector["merchant_id"]
+                and item["connector_id"] != connector["connector_id"]
+                and item["status"] == "verified"
+            ),
+            key=lambda item: item["updated_at"],
+            default=None,
+        )
+        merchant["device_risk_connector_id"] = (
+            replacement["connector_id"] if replacement else None
+        )
+
+    def _append_device_risk_audit(
+        self,
+        connector: DeviceRiskConnector,
+        action: str,
+    ) -> None:
+        self._device_risk_connector_audit.append(
+            {
+                "connector_id": connector["connector_id"],
+                "merchant_id": connector["merchant_id"],
+                "provider": connector["provider"],
+                "action": action,
+                "status": connector["status"],
+                "error_code": connector["last_error_code"],
+                "created_at": datetime.now(timezone.utc),
             }
         )
 
@@ -994,12 +1208,16 @@ class InMemoryStore:
         merchants = payload.get("merchants", {})
         payment_connectors = payload.get("payment_connectors", {})
         payment_connector_audit = payload.get("payment_connector_audit", [])
+        device_risk_connectors = payload.get("device_risk_connectors", {})
+        device_risk_connector_audit = payload.get("device_risk_connector_audit", [])
         orders = payload.get("orders", {})
         disputes = payload.get("disputes", {})
         if (
             not isinstance(merchants, dict)
             or not isinstance(payment_connectors, dict)
             or not isinstance(payment_connector_audit, list)
+            or not isinstance(device_risk_connectors, dict)
+            or not isinstance(device_risk_connector_audit, list)
             or not isinstance(orders, dict)
             or not isinstance(disputes, dict)
         ):
@@ -1019,6 +1237,8 @@ class InMemoryStore:
         self._orders = deepcopy(orders)
         self._payment_connectors = deepcopy(payment_connectors)
         self._payment_connector_audit = deepcopy(payment_connector_audit)
+        self._device_risk_connectors = deepcopy(device_risk_connectors)
+        self._device_risk_connector_audit = deepcopy(device_risk_connector_audit)
         self._disputes = deepcopy(disputes)
         provider_events = payload.get("provider_events", {})
         simulator_disputes = payload.get("simulator_disputes", {})
@@ -1056,6 +1276,8 @@ class InMemoryStore:
             "merchants": merchants,
             "payment_connectors": self._payment_connectors,
             "payment_connector_audit": self._payment_connector_audit,
+            "device_risk_connectors": self._device_risk_connectors,
+            "device_risk_connector_audit": self._device_risk_connector_audit,
             "orders": self._orders,
             "disputes": self._disputes,
             "provider_events": self._provider_events,

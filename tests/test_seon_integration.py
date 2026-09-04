@@ -60,5 +60,8 @@ def test_seon_client_raises_for_error_response() -> None:
         client=httpx.Client(transport=httpx.MockTransport(handler), base_url="https://api.seon.io"),
     )
 
-    with pytest.raises(SeonRequestError):
+    with pytest.raises(SeonRequestError) as captured:
         client.fraud_check({"ip": "49.36.18.22"})
+
+    assert captured.value.status_code == 403
+    assert "forbidden" not in str(captured.value)

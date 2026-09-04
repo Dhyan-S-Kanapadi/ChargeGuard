@@ -2,8 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Merchant, PaymentConnector } from "../../api/schemas";
-import { PaymentConnection } from "./MerchantsPage";
+import type { DeviceRiskConnector, Merchant, PaymentConnector } from "../../api/schemas";
+import { DeviceRiskConnection, PaymentConnection } from "./MerchantsPage";
 
 const mockClient = vi.hoisted(() => ({
   paymentConnectors: vi.fn(),
@@ -11,6 +11,10 @@ const mockClient = vi.hoisted(() => ({
   connectStripe: vi.fn(),
   verifyPaymentConnector: vi.fn(),
   disconnectPaymentConnector: vi.fn(),
+  deviceRiskConnectors: vi.fn(),
+  connectSeon: vi.fn(),
+  verifyDeviceRiskConnector: vi.fn(),
+  disconnectDeviceRiskConnector: vi.fn(),
 }));
 
 vi.mock("../../app/ConnectionContext", () => ({
@@ -46,12 +50,34 @@ const connector = {
   last_error_code: null,
 } as PaymentConnector;
 
+const deviceConnector = {
+  connector_id: "devcon-ui",
+  merchant_id: "merchant-ui",
+  provider: "seon",
+  status: "verification_pending",
+  credential_hint: "ending in 5678",
+  verified_at: null,
+  last_success_at: null,
+  created_at: "2026-09-04T12:00:00Z",
+  updated_at: "2026-09-04T12:00:00Z",
+  last_error_code: "verification_requires_first_real_request",
+} as DeviceRiskConnector;
+
 function renderConnection(connectors: PaymentConnector[] = []) {
   mockClient.paymentConnectors.mockResolvedValue(connectors);
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(<QueryClientProvider client={queryClient}><PaymentConnection merchant={merchant} /></QueryClientProvider>);
+  return queryClient;
+}
+
+function renderDeviceConnection(connectors: DeviceRiskConnector[] = []) {
+  mockClient.deviceRiskConnectors.mockResolvedValue(connectors);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  render(<QueryClientProvider client={queryClient}><DeviceRiskConnection merchant={merchant} /></QueryClientProvider>);
   return queryClient;
 }
 
@@ -131,5 +157,54 @@ describe("merchant payment connection", () => {
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "Disconnect" }));
     await waitFor(() => expect(mockClient.disconnectPaymentConnector).toHaveBeenCalledWith("merchant-ui", "paycon-ui"));
+  });
+});
+
+describe("merchant device-risk connection", () => {
+  it("shows pending status and safe SEON metadata", async () => {
+    renderDeviceConnection([deviceConnector]);
+
+    expect(await screen.findByText("ending in 5678")).toBeInTheDocument();
+    expect(screen.getByText("verification_pending")).toBeInTheDocument();
+    expect(screen.getByText(/Verification completes on the first real fraud-check request/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("SEON API key")).not.toBeInTheDocument();
+  });
+
+  it("connects SEON, clears the secret, and does not cache or store it", async () => {
+    mockClient.connectSeon.mockResolvedValue(deviceConnector);
+    const queryClient = renderDeviceConnection();
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText("SEON API key"), "seon-ui-super-secret");
+    await user.click(screen.getByRole("button", { name: "Connect SEON" }));
+
+    await waitFor(() => expect(mockClient.connectSeon).toHaveBeenCalledWith("merchant-ui", "seon-ui-super-secret"));
+    expect(screen.queryByDisplayValue("seon-ui-super-secret")).not.toBeInTheDocument();
+    expect(JSON.stringify(queryClient.getQueryCache().getAll().map((item) => item.state.data))).not.toContain("seon-ui-super-secret");
+    expect(JSON.stringify(localStorage)).not.toContain("seon-ui-super-secret");
+    expect(JSON.stringify(sessionStorage)).not.toContain("seon-ui-super-secret");
+  });
+
+  it("rotates and explains deferred verification", async () => {
+    mockClient.connectSeon.mockResolvedValue(deviceConnector);
+    mockClient.verifyDeviceRiskConnector.mockResolvedValue(deviceConnector);
+    renderDeviceConnection([deviceConnector]);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Reconnect/rotate" }));
+    await user.type(screen.getByLabelText("SEON API key"), "seon-rotated-secret");
+    await user.click(screen.getByRole("button", { name: "Connect SEON" }));
+    await waitFor(() => expect(mockClient.connectSeon).toHaveBeenCalledWith("merchant-ui", "seon-rotated-secret"));
+
+    await user.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText(/no billable test was sent/i)).toBeInTheDocument();
+  });
+
+  it("requires confirmation before disconnecting SEON", async () => {
+    mockClient.disconnectDeviceRiskConnector.mockResolvedValue({ ...deviceConnector, status: "disconnected" });
+    renderDeviceConnection([deviceConnector]);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Disconnect" }));
+    expect(mockClient.disconnectDeviceRiskConnector).not.toHaveBeenCalled();
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Disconnect" }));
+    await waitFor(() => expect(mockClient.disconnectDeviceRiskConnector).toHaveBeenCalledWith("merchant-ui", "devcon-ui"));
   });
 });

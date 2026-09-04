@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Building2, Plus } from "lucide-react";
 import { useState, type FormEvent } from "react";
-import type { Merchant, PaymentConnector } from "../../api/schemas";
+import type { DeviceRiskConnector, Merchant, PaymentConnector } from "../../api/schemas";
 import { useConnection } from "../../app/ConnectionContext";
 import { Badge, Button, ConfirmDialog, EmptyState, ErrorState, Panel, Skeleton } from "../../components/ui";
 import { formatDate, formatMoney, formatPercent } from "../../utils/format";
@@ -119,6 +119,109 @@ export function PaymentConnection({ merchant }: { merchant: Merchant }) {
   </section>;
 }
 
+export function DeviceRiskConnection({ merchant }: { merchant: Merchant }) {
+  const { client } = useConnection();
+  const queryClient = useQueryClient();
+  const queryKey = ["device-risk-connectors", merchant.merchant_id] as const;
+  const query = useQuery({ queryKey, queryFn: ({ signal }) => client.deviceRiskConnectors(merchant.merchant_id, signal) });
+  const [showForm, setShowForm] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [notice, setNotice] = useState("");
+  const [disconnecting, setDisconnecting] = useState<DeviceRiskConnector | null>(null);
+  const connectors = query.data || [];
+  const active = connectors.find((item) => item.status === "verification_pending")
+    || connectors.find((item) => item.connector_id === merchant.device_risk_connector_id)
+    || connectors.find((item) => item.status === "verified")
+    || connectors[0];
+
+  const refresh = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey }),
+      queryClient.invalidateQueries({ queryKey: ["merchants"] }),
+    ]);
+  };
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setError(null); setNotice(""); setPending(true);
+    const element = event.currentTarget;
+    const apiKey = String(new FormData(element).get("seon_api_key") || "");
+    element.reset();
+    try {
+      const connector = await client.connectSeon(merchant.merchant_id, apiKey);
+      await refresh();
+      setNotice(connector.status === "verification_pending"
+        ? "SEON is configured. Verification will complete after the first real fraud-check request."
+        : "SEON connection updated.");
+      setShowForm(false);
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const verify = async (connector: DeviceRiskConnector) => {
+    setError(null); setNotice(""); setPending(true);
+    try {
+      const result = await client.verifyDeviceRiskConnector(merchant.merchant_id, connector.connector_id);
+      await refresh();
+      setNotice(result.status === "verification_pending"
+        ? "Verification requires the first real fraud-check request; no billable test was sent."
+        : "SEON connection is verified.");
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const disconnect = async () => {
+    if (!disconnecting) return;
+    setError(null); setNotice(""); setPending(true);
+    try {
+      await client.disconnectDeviceRiskConnector(merchant.merchant_id, disconnecting.connector_id);
+      setDisconnecting(null);
+      await refresh();
+      setNotice("SEON connection disconnected.");
+    } catch (caught) {
+      setError(caught);
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return <section className="payment-connection" aria-label={`Device risk connection for ${merchant.name}`}>
+    <h3>Device risk connection</h3>
+    <p className="muted">SEON credentials are encrypted and scoped to this merchant.</p>
+    {query.isLoading ? <Skeleton lines={2} /> : query.error ? <ErrorState error={query.error} /> : active ? <>
+      <dl className="detail-grid">
+        <div><dt>Provider</dt><dd>SEON</dd></div>
+        <div><dt>Connection status</dt><dd><Badge tone={active.status === "verified" ? "success" : active.status === "invalid" ? "danger" : "neutral"}>{active.status}</Badge></dd></div>
+        <div><dt>Credential</dt><dd>{active.credential_hint}</dd></div>
+        <div><dt>Verified time</dt><dd>{active.verified_at ? formatDate(active.verified_at) : "Not verified"}</dd></div>
+        <div><dt>Last successful request</dt><dd>{active.last_success_at ? formatDate(active.last_success_at) : "None yet"}</dd></div>
+      </dl>
+      {active.status === "verification_pending" ? <p className="muted">Verification completes on the first real fraud-check request. Test connection does not send a billable request.</p> : null}
+      <div className="button-row">
+        <Button variant="secondary" onClick={() => setShowForm(true)}>Reconnect/rotate</Button>
+        <Button variant="secondary" loading={pending} onClick={() => void verify(active)}>Test connection</Button>
+        <Button variant="danger" onClick={() => setDisconnecting(active)}>Disconnect</Button>
+      </div>
+    </> : <p className="muted">No device-risk provider connected.</p>}
+    {(showForm || !active) ? <form className="form-grid connector-form" onSubmit={(event) => void submit(event)}>
+      <label>SEON API key<input name="seon_api_key" type="password" autoComplete="new-password" required /></label>
+      <div className="button-row">{active ? <Button type="button" variant="ghost" onClick={() => setShowForm(false)}>Cancel</Button> : null}<Button type="submit" loading={pending}>Connect SEON</Button></div>
+    </form> : null}
+    {notice ? <p className="success-box" role="status">{notice}</p> : null}
+    {error ? <ErrorState error={error} /> : null}
+    <ConfirmDialog open={Boolean(disconnecting)} title="Disconnect SEON?" confirmLabel="Disconnect" danger pending={pending} onClose={() => setDisconnecting(null)} onConfirm={() => void disconnect()}>
+      <p>ChargeGuard will remove the encrypted credential and stop live device-risk lookups for this merchant.</p>
+    </ConfirmDialog>
+  </section>;
+}
+
 export function MerchantsPage() {
   const { client } = useConnection();
   const queryClient = useQueryClient();
@@ -168,6 +271,7 @@ export function MerchantsPage() {
       <div className="merchant-head"><span><Building2 /></span><div><h2>{merchant.name}</h2><small>{merchant.merchant_id}</small></div><Badge>{merchant.vertical.replaceAll("_", " ")}</Badge></div>
       <dl className="detail-grid"><div><dt>Payment provider</dt><dd>{merchant.payment_provider || "Not configured"}</dd></div><div><dt>Storefront</dt><dd>{merchant.storefront_platform}</dd></div><div><dt>Store credential</dt><dd>{merchant.platform_credential_verified ? "Verified" : "Not verified"}</dd></div><div><dt>Average order value</dt><dd>{formatMoney(merchant.average_order_value, "INR")}</dd></div><div><dt>Prior chargebacks</dt><dd>{merchant.chargeback_history_count}</dd></div></dl>
       <PaymentConnection merchant={merchant} />
+      <DeviceRiskConnection merchant={merchant} />
       {Object.entries(merchant.merchant_dispute_ratio).length ? <div className="ratio-list">{Object.entries(merchant.merchant_dispute_ratio).map(([network, ratio]) => <span key={network}><strong>{network}</strong><Badge tone={ratio.status === "OK" ? "success" : ratio.status === "WARNING" ? "warning" : "neutral"}>{ratio.status}</Badge><small>{formatPercent(ratio.current_ratio_pct == null ? null : ratio.current_ratio_pct / 100)}</small></span>)}</div> : <p className="muted">No transaction-volume ratios configured.</p>}
     </Panel>)}</div> : <EmptyState title="No merchants configured">Create a merchant to establish an operational workspace.</EmptyState>}
   </>;

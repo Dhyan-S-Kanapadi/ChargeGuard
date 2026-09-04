@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api.assistant import router as assistant_router
 from api.disputes import router as disputes_router
+from api.device_risk_connectors import router as device_risk_connectors_router
 from api.merchants import router as merchants_router
 from api.orders import router as orders_router
 from api.payment_connectors import router as payment_connectors_router
@@ -39,17 +40,21 @@ def _log_deployment_warnings() -> None:
     if not os.getenv("CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY", "").strip():
         logger.warning(
             "CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY is not configured; "
-            "merchant payment connectors will fail closed."
+            "merchant provider connectors will fail closed."
         )
     if not os.getenv("CHARGEGUARD_CREDENTIAL_STORE_PATH", "").strip():
         logger.warning(
             "CHARGEGUARD_CREDENTIAL_STORE_PATH is not configured; "
-            "merchant payment connectors will fail closed."
+            "merchant provider connectors will fail closed."
         )
     if os.getenv("ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK", "false").strip().lower() in {
         "1", "true", "yes", "on"
     }:
         logger.warning("Global payment credential fallback is enabled in production.")
+    if os.getenv("ALLOW_GLOBAL_SEON_CREDENTIAL_FALLBACK", "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }:
+        logger.warning("Global SEON credential fallback is enabled in production.")
     logger.warning(
         "The synchronized storage supports one application process only, including "
         "the JSON and encrypted credential files. "
@@ -73,6 +78,11 @@ async def validation_exception_handler(
     request: Request,
     exc: RequestValidationError,
 ):
+    if "/device-risk-connectors" in request.url.path:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "invalid_device_risk_connector_request"},
+        )
     if "/payment-connectors" in request.url.path:
         return JSONResponse(
             status_code=422,
@@ -86,6 +96,7 @@ app.include_router(disputes_router)
 app.include_router(merchants_router)
 app.include_router(orders_router)
 app.include_router(payment_connectors_router)
+app.include_router(device_risk_connectors_router)
 app.include_router(stats_router)
 app.include_router(assistant_router)
 app.include_router(razorpay_admin_router)

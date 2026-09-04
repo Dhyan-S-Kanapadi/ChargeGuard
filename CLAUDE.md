@@ -235,6 +235,8 @@ Merchant-specific support credentials are selected by a non-secret `support_conn
 
 Live Razorpay and Stripe calls use merchant-scoped payment connectors. `MerchantProfile` contains only connector references; non-secret connector metadata and audit events live in the synchronized JSON store, while credential dictionaries live in a separate Fernet-encrypted file. The resolver always checks merchant ownership and verified status before decrypting. Credentials must never enter `ChargebackState`, dispute records, provider events, logs, or API responses. `ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK` defaults to `false`; when explicitly enabled for local compatibility it applies only when a merchant has no connector reference, never when a configured connector is broken.
 
+Live SEON calls use the same encrypted `CredentialSecretStore` through a merchant-owned `device_risk_connector_id`. New and rotated credentials remain `verification_pending` until the first real fraud check succeeds; the operator test route does not manufacture a billable request. HTTP 401/403 invalidates the candidate and restores a prior verified connector, while timeouts and 5xx failures remain transient and degrade evidence safely. `ALLOW_GLOBAL_SEON_CREDENTIAL_FALLBACK` defaults to `false`, and a configured invalid connector never falls back globally. Only normalized device evidence is retained.
+
 ## Optional LLM Boundaries
 
 LLM features are additive and must remain outside deterministic decisioning:
@@ -260,6 +262,10 @@ All routes except `/health` and the Razorpay webhook require `X-API-Key`, unless
 | `GET /merchants/{id}/payment-connectors` | `X-API-Key` | List safe connector metadata |
 | `POST /merchants/{id}/payment-connectors/{connector_id}/verify` | `X-API-Key` | Re-test one owned connector |
 | `DELETE /merchants/{id}/payment-connectors/{connector_id}` | `X-API-Key` | Detach connector and delete encrypted secret |
+| `POST /merchants/{id}/device-risk-connectors/seon` | `X-API-Key` | Configure or rotate an encrypted merchant SEON credential |
+| `GET /merchants/{id}/device-risk-connectors` | `X-API-Key` | List safe SEON connector metadata |
+| `POST /merchants/{id}/device-risk-connectors/{connector_id}/verify` | `X-API-Key` | Report verified state or explain first-request verification |
+| `DELETE /merchants/{id}/device-risk-connectors/{connector_id}` | `X-API-Key` | Detach SEON and delete its encrypted secret |
 | `POST /webhook/chargeback` | `X-API-Key` | Submit normalized internal chargeback |
 | `POST /webhook/razorpay` | Razorpay HMAC signature | Receive provider-native dispute event |
 | `GET /disputes` | `X-API-Key` | List redacted disputes |
@@ -364,7 +370,7 @@ Current configuration groups are:
 | API security | `API_KEY`, `INTERNAL_API_TOKEN` |
 | Rate limits | `WEBHOOK_RATE_LIMIT_PER_MINUTE`, `ASSISTANT_RATE_LIMIT_PER_MINUTE` |
 | Provider mode | `CHARGEGUARD_USE_STUBS` and each provider's `*_USE_STUBS` override |
-| Payment connectors | `CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY`, `CHARGEGUARD_CREDENTIAL_STORE_PATH`, `ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK` |
+| Provider connectors | `CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY`, `CHARGEGUARD_CREDENTIAL_STORE_PATH`, payment and SEON fallback flags |
 | Razorpay | Deprecated fallback REST credentials, webhook controls, claim timeout, startup recovery, and simulator controls |
 | Persistence/output | `CHARGEGUARD_STORE_PATH`, encrypted credential-store path, `REBUTTAL_OUTPUT_DIR` |
 | ML/feedback | model, outcome, metadata, playbook-stat paths, retraining threshold, and synthetic-data decay |
