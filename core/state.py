@@ -9,6 +9,8 @@ class MerchantProfile(TypedDict):
     name: str
     vertical: Literal["ecommerce", "food_delivery", "quick_commerce"]
     payment_provider: NotRequired[Literal["razorpay", "stripe"]]
+    payment_connector_id: NotRequired[str | None]
+    payment_connector_ids: NotRequired[dict[str, str]]
     razorpay_account_id: NotRequired[str | None]
     shipping_provider: NotRequired[Literal["shiprocket", "delhivery"]]
     support_connector_ref: NotRequired[str | None]
@@ -25,6 +27,19 @@ class MerchantProfile(TypedDict):
     platform_credential_verified: NotRequired[bool]
     platform_credential_verified_at: NotRequired[datetime | None]
     platform_credential_verification_reason: NotRequired[str | None]
+
+
+class PaymentConnector(TypedDict):
+    connector_id: str
+    merchant_id: str
+    provider: Literal["razorpay", "stripe"]
+    provider_account_id: str | None
+    status: Literal["pending", "verified", "invalid", "disconnected"]
+    credential_hint: str
+    verified_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    last_error_code: str | None
 
 
 class OrderRecord(TypedDict):

@@ -233,6 +233,8 @@ On provider failure, an evidence agent must not fabricate maximally suspicious e
 
 Merchant-specific support credentials are selected by a non-secret `support_connector_ref`. Secrets stay in environment variables such as `CHARGEGUARD_CONNECTOR_ACME_FRESHDESK_API_KEY`; they must not be stored in merchant API payloads.
 
+Live Razorpay and Stripe calls use merchant-scoped payment connectors. `MerchantProfile` contains only connector references; non-secret connector metadata and audit events live in the synchronized JSON store, while credential dictionaries live in a separate Fernet-encrypted file. The resolver always checks merchant ownership and verified status before decrypting. Credentials must never enter `ChargebackState`, dispute records, provider events, logs, or API responses. `ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK` defaults to `false`; when explicitly enabled for local compatibility it applies only when a merchant has no connector reference, never when a configured connector is broken.
+
 ## Optional LLM Boundaries
 
 LLM features are additive and must remain outside deterministic decisioning:
@@ -254,6 +256,10 @@ All routes except `/health` and the Razorpay webhook require `X-API-Key`, unless
 | `POST /merchants` | `X-API-Key` | Register merchant and provider mapping |
 | `GET /merchants` | `X-API-Key` | List merchants for operator workspace selection |
 | `GET /merchants/{id}` | `X-API-Key` | Retrieve merchant and monitoring ratios |
+| `POST /merchants/{id}/payment-connectors/{provider}` | `X-API-Key` | Verify and connect or rotate Razorpay/Stripe credentials |
+| `GET /merchants/{id}/payment-connectors` | `X-API-Key` | List safe connector metadata |
+| `POST /merchants/{id}/payment-connectors/{connector_id}/verify` | `X-API-Key` | Re-test one owned connector |
+| `DELETE /merchants/{id}/payment-connectors/{connector_id}` | `X-API-Key` | Detach connector and delete encrypted secret |
 | `POST /webhook/chargeback` | `X-API-Key` | Submit normalized internal chargeback |
 | `POST /webhook/razorpay` | Razorpay HMAC signature | Receive provider-native dispute event |
 | `GET /disputes` | `X-API-Key` | List redacted disputes |
@@ -358,8 +364,9 @@ Current configuration groups are:
 | API security | `API_KEY`, `INTERNAL_API_TOKEN` |
 | Rate limits | `WEBHOOK_RATE_LIMIT_PER_MINUTE`, `ASSISTANT_RATE_LIMIT_PER_MINUTE` |
 | Provider mode | `CHARGEGUARD_USE_STUBS` and each provider's `*_USE_STUBS` override |
-| Razorpay | REST credentials, webhook controls, claim timeout, startup recovery, and simulator controls |
-| Persistence/output | `CHARGEGUARD_STORE_PATH`, `REBUTTAL_OUTPUT_DIR` |
+| Payment connectors | `CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY`, `CHARGEGUARD_CREDENTIAL_STORE_PATH`, `ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK` |
+| Razorpay | Deprecated fallback REST credentials, webhook controls, claim timeout, startup recovery, and simulator controls |
+| Persistence/output | `CHARGEGUARD_STORE_PATH`, encrypted credential-store path, `REBUTTAL_OUTPUT_DIR` |
 | ML/feedback | model, outcome, metadata, playbook-stat paths, retraining threshold, and synthetic-data decay |
 | Decision economics | response costs, FX rates, and `FIGHT_EV_THRESHOLD` |
 | Evidence providers | Stripe, Shiprocket, Delhivery, Freshdesk, Gmail, SEON, Ethoca, Verifi, and food-platform settings |
@@ -385,16 +392,17 @@ MODEL_PATH=./ml/artifacts/win_probability_model.pkl
 CHARGEGUARD_STORE_PATH=./data/chargeguard_store.json
 ```
 
-Razorpay Test Mode additionally requires:
+Razorpay Test Mode additionally requires a verified merchant connector and:
 
 ```env
 RAZORPAY_USE_STUBS=false
-RAZORPAY_KEY_ID=rzp_test_...
-RAZORPAY_KEY_SECRET=...
+CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY=<fernet-key-from-secret-manager>
+CHARGEGUARD_CREDENTIAL_STORE_PATH=./data/chargeguard_payment_credentials.json
+ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK=false
 RAZORPAY_SIMULATOR_ENABLED=false
 ```
 
-Provider-specific `*_USE_STUBS` values may be left blank to inherit `CHARGEGUARD_USE_STUBS`. For India-first Razorpay Test Mode validation, keep the global setting `true`, set only `RAZORPAY_USE_STUBS=false`, and leave unrelated providers stubbed until their credentials and test plans are ready.
+Generate a Fernet key with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`, store it outside Git, and preserve it across restarts. Provider-specific `*_USE_STUBS` values may be left blank to inherit `CHARGEGUARD_USE_STUBS`. For India-first Razorpay Test Mode validation, keep the global setting `true`, set only `RAZORPAY_USE_STUBS=false`, and leave unrelated providers stubbed until their connectors and test plans are ready.
 
 Optional assisted reason classification also requires `ANTHROPIC_API_KEY` when live,
 `REASON_CLASSIFICATION_ENABLED=true`, and may configure
@@ -404,9 +412,9 @@ global stub setting when blank. Keep the feature disabled unless an authenticate
 will review every recommendation; manual classification remains available when it is disabled
 or unavailable.
 
-The webhook secret is separate from the API key secret:
+The webhook secret is separate from payment connector credentials:
 
-- `RAZORPAY_KEY_SECRET` authenticates ChargeGuard's outbound REST calls.
+- A merchant connector authenticates ChargeGuard's outbound REST calls.
 - `RAZORPAY_WEBHOOK_SECRET` verifies inbound webhook signatures.
 
 Docker Compose loads `.env` through `env_file`. A direct native Python process does not automatically load `.env` because `python-dotenv` is not a dependency. Export variables into the process environment before starting natively, or use Docker Compose.
@@ -496,7 +504,7 @@ Perform these steps in order:
    docker compose down
    ```
 
-Compose mounts `chargeguard-data` at `/var/data` and defaults `CHARGEGUARD_STORE_PATH` to `/var/data/chargeguard_store.json`. Run only one application process with this JSON store. There is no Neo4j service in Compose; do not reintroduce one unless a concrete persisted graph feature is implemented and tested.
+Compose mounts `chargeguard-data` at `/var/data` and defaults `CHARGEGUARD_STORE_PATH` to `/var/data/chargeguard_store.json` and `CHARGEGUARD_CREDENTIAL_STORE_PATH` to `/var/data/chargeguard_payment_credentials.json`. Keep the Fernet key in the platform secret manager, not on the volume. Both file stores are controlled single-process pilot infrastructure. Render deployments must mount the same persistent disk across deploys. Multi-worker production must move metadata to PostgreSQL and credentials to a managed vault behind `CredentialSecretStore`. There is no Neo4j service in Compose; do not reintroduce one unless a concrete persisted graph feature is implemented and tested.
 
 ## Internal Artificial Chargeback Test
 
@@ -518,7 +526,7 @@ This tests application behavior. It does not mimic Razorpay's authenticated deli
 The simulator exercises the real HTTP webhook handler with Razorpay-shaped signed JSON but never contacts Razorpay.
 
 1. Set development mode, simulator enabled, API key, and webhook secret.
-2. Register a Razorpay merchant with a unique `razorpay_account_id`.
+2. Register a simulator-only Razorpay account mapping with a unique `razorpay_account_id`; no live connector credential is required.
 3. Start the API on port 8000.
 4. Run scenarios:
 
@@ -547,13 +555,13 @@ Simulator safeguards must remain intact:
 
 Do not call a connection live until every step below is completed:
 
-1. Obtain Razorpay Test Mode `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` from the merchant dashboard.
-2. Generate a separate webhook secret and set `RAZORPAY_WEBHOOK_SECRET`.
+1. Obtain a Razorpay Test Mode key ID and key secret from the merchant dashboard.
+2. Configure the Fernet key and persistent encrypted credential-store path, then generate a separate webhook secret and set `RAZORPAY_WEBHOOK_SECRET`.
 3. Deploy ChargeGuard on a public HTTPS host. Razorpay cannot deliver to localhost.
 4. Set `ENVIRONMENT` to the staging value used by the deployment.
 5. Set `RAZORPAY_SIMULATOR_ENABLED=false` for the real provider test.
 6. Set `RAZORPAY_WEBHOOK_ENABLED=true` and `RAZORPAY_USE_STUBS=false`.
-7. Register the merchant with `payment_provider=razorpay` and the exact account ID emitted by Razorpay webhook events.
+7. Register the merchant, then use the authenticated Razorpay connector route with the key pair and exact account ID emitted by Razorpay webhook events. Require a `verified` response.
 8. Configure callback `https://<public-host>/webhook/razorpay` in the Razorpay Test Mode dashboard.
 9. Select all six dispute lifecycle events listed above.
 10. Enter the same webhook secret in Razorpay and ChargeGuard.
@@ -699,12 +707,12 @@ Do not describe these items as already implemented.
 
 - Confirm dashboard and server use the same webhook secret.
 - Verify HMAC over exact raw bytes, not parsed JSON.
-- Do not use `RAZORPAY_KEY_SECRET` as the webhook secret unless deliberately configured identically.
+- Never reuse a merchant connector key secret as the webhook secret.
 
 ### Razorpay webhook is unresolved
 
 - Read the event's `account_id` from the protected event record.
-- Register or correct the merchant's `razorpay_account_id`.
+- Create or rotate the merchant's verified Razorpay payment connector using the event's exact account ID.
 - Retry/reconcile after mapping rather than editing provider payloads.
 
 ### Case escalates instead of fighting

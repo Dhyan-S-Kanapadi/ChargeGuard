@@ -3,13 +3,17 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.assistant import router as assistant_router
 from api.disputes import router as disputes_router
 from api.merchants import router as merchants_router
 from api.orders import router as orders_router
+from api.payment_connectors import router as payment_connectors_router
 from api.razorpay_admin import (
     router as razorpay_admin_router,
     schedule_startup_razorpay_recovery,
@@ -32,8 +36,23 @@ def _log_deployment_warnings() -> None:
             "CHARGEGUARD_STORE_PATH is not configured in production; provider events "
             "and disputes will not survive a restart."
         )
+    if not os.getenv("CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY", "").strip():
+        logger.warning(
+            "CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY is not configured; "
+            "merchant payment connectors will fail closed."
+        )
+    if not os.getenv("CHARGEGUARD_CREDENTIAL_STORE_PATH", "").strip():
+        logger.warning(
+            "CHARGEGUARD_CREDENTIAL_STORE_PATH is not configured; "
+            "merchant payment connectors will fail closed."
+        )
+    if os.getenv("ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK", "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }:
+        logger.warning("Global payment credential fallback is enabled in production.")
     logger.warning(
-        "The synchronized JSON store supports one application process only. "
+        "The synchronized storage supports one application process only, including "
+        "the JSON and encrypted credential files. "
         "Multi-worker production requires a shared transactional database and "
         "durable queue/outbox with atomic event claim and job creation."
     )
@@ -47,10 +66,26 @@ async def _lifespan(_: FastAPI):
 
 
 app = FastAPI(title="ChargeGuard AI", version="0.1.0", lifespan=_lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError,
+):
+    if "/payment-connectors" in request.url.path:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "invalid_payment_connector_request"},
+        )
+    return await request_validation_exception_handler(request, exc)
+
+
 app.include_router(webhooks_router)
 app.include_router(disputes_router)
 app.include_router(merchants_router)
 app.include_router(orders_router)
+app.include_router(payment_connectors_router)
 app.include_router(stats_router)
 app.include_router(assistant_router)
 app.include_router(razorpay_admin_router)

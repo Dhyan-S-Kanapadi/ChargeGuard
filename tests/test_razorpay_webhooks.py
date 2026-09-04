@@ -334,6 +334,7 @@ def test_upi_dispute_never_becomes_rupay() -> None:
 
 def test_card_network_is_enriched_from_expanded_payment(monkeypatch) -> None:
     assert store.create_merchant(_merchant())
+    monkeypatch.setenv("ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK", "true")
     calls = []
 
     class FakeClient:
@@ -363,6 +364,7 @@ def test_card_network_is_enriched_from_expanded_payment(monkeypatch) -> None:
 
 def test_enrichment_failure_does_not_drop_event(monkeypatch) -> None:
     assert store.create_merchant(_merchant())
+    monkeypatch.setenv("ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK", "true")
 
     class FailingClient:
         def get_payment(self, payment_id, *, expand_card=False):

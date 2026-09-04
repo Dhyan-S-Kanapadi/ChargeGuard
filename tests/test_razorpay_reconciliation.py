@@ -31,6 +31,7 @@ def _merchant() -> dict:
 
 def test_reconciliation_is_protected_and_uses_provider_upsert(monkeypatch) -> None:
     assert store.create_merchant(_merchant())
+    monkeypatch.setenv("ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK", "true")
     now = datetime.now(timezone.utc)
     calls = []
 
@@ -104,6 +105,7 @@ def test_failed_reconciliation_event_retries_from_sanitized_event_data(
     monkeypatch,
 ) -> None:
     assert store.create_merchant(_merchant())
+    monkeypatch.setenv("ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK", "true")
     now = datetime.now(timezone.utc)
 
     class FakeClient:
@@ -187,6 +189,7 @@ def test_failed_reconciliation_event_retries_from_sanitized_event_data(
 
 def test_process_pending_recovers_failed_reconciliation_event(monkeypatch) -> None:
     assert store.create_merchant(_merchant())
+    monkeypatch.setenv("ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK", "true")
     now = datetime.now(timezone.utc)
 
     class FakeClient:

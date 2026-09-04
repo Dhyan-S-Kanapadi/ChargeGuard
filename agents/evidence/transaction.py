@@ -7,9 +7,13 @@ from typing import Any
 from core.state import ChargebackState, TransactionEvidence
 from integrations.razorpay import RazorpayClient, RazorpayConfigError
 from integrations.stripe import StripeClient, StripeConfigError
+from integrations.credential_secrets import CredentialStoreError
+from integrations.payment_client_factory import PaymentClientFactory, PaymentConnectorError
+from api.store import store
 
 
 logger = logging.getLogger(__name__)
+payment_client_factory = PaymentClientFactory(store)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -360,7 +364,7 @@ def _collect_razorpay(state: ChargebackState) -> tuple[dict[str, Any], dict[str,
     if not payment_id:
         raise ValueError("Razorpay collection requires payment_id")
 
-    client = RazorpayClient.from_env()
+    client = payment_client_factory.for_merchant(state["merchant_profile"], "razorpay")
     payment = client.get_payment(payment_id)
     provider_order_id = payment.get("order_id") or state.get("provider_order_id")
     order = client.get_order(str(provider_order_id)) if provider_order_id else {}
@@ -372,7 +376,7 @@ def _collect_stripe(state: ChargebackState) -> tuple[dict[str, Any], dict[str, A
     if not payment_id:
         raise ValueError("Stripe collection requires payment_id")
 
-    client = StripeClient.from_env()
+    client = payment_client_factory.for_merchant(state["merchant_profile"], "stripe")
     payment_intent = client.get_payment_intent(payment_id)
     latest_charge_id = payment_intent.get("latest_charge")
     charge = client.get_charge(latest_charge_id) if isinstance(latest_charge_id, str) else {}
@@ -442,7 +446,12 @@ def transaction_agent(state: ChargebackState) -> ChargebackState:
         if provider_order_id:
             state["provider_order_id"] = provider_order_id
         state["compelling_evidence_3_0"] = _evaluate_compelling_evidence_3_0(state)
-    except (RazorpayConfigError, StripeConfigError):
+    except (
+        CredentialStoreError,
+        PaymentConnectorError,
+        RazorpayConfigError,
+        StripeConfigError,
+    ):
         provider = _payment_provider(state)
         logger.warning("%s credentials are unavailable", provider)
         state["transaction"] = _empty_transaction_evidence(

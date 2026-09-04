@@ -23,6 +23,12 @@ from integrations.razorpay import (
     RazorpayConfigError,
     RazorpayRequestError,
 )
+from integrations.credential_secrets import CredentialStoreError
+from integrations.payment_client_factory import (
+    PaymentClientFactory,
+    PaymentConnectorError,
+    global_payment_fallback_enabled,
+)
 from integrations.razorpay_schemas import RazorpayWebhookEnvelope
 from integrations.razorpay_webhook import (
     normalize_dispute,
@@ -40,6 +46,7 @@ _MAX_RECOVERY_BATCH_SIZE = 100
 _DEFAULT_STARTUP_RECOVERY_LIMIT = 25
 _STARTUP_RECOVERY_LOCK = Lock()
 _startup_recovery_started = False
+payment_client_factory = PaymentClientFactory(store)
 _PUBLIC_EVENT_FIELDS = (
     "event_id",
     "provider_event_id",
@@ -269,23 +276,45 @@ def reconcile_razorpay_disputes(
     merchant = store.get_merchant(payload.merchant_id)
     if merchant is None:
         raise HTTPException(status_code=404, detail="Merchant not found.")
-    account_id = merchant.get("razorpay_account_id")
-    if merchant.get("payment_provider") != "razorpay" or not account_id:
+    connector_id = merchant.get("payment_connector_ids", {}).get("razorpay")
+    connector = (
+        store.get_payment_connector(payload.merchant_id, connector_id)
+        if connector_id
+        else None
+    )
+    account_id = (
+        connector.get("provider_account_id")
+        if connector and connector.get("status") == "verified"
+        else merchant.get("razorpay_account_id")
+        if not connector_id and global_payment_fallback_enabled()
+        else None
+    )
+    if not account_id:
         raise HTTPException(
             status_code=422,
-            detail="Merchant must have a Razorpay account mapping.",
+            detail="Merchant must have a verified Razorpay payment connector.",
         )
 
     try:
-        client = RazorpayClient.from_env()
+        client = payment_client_factory.for_merchant(merchant, "razorpay")
         disputes = client.list_disputes(
             from_timestamp=payload.from_timestamp,
             to_timestamp=payload.to_timestamp,
             count=payload.count,
             skip=payload.skip,
         )
-    except (RazorpayConfigError, RazorpayRequestError) as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except (
+        CredentialStoreError,
+        PaymentConnectorError,
+        RazorpayConfigError,
+        RazorpayRequestError,
+    ) as exc:
+        detail = (
+            exc.code
+            if isinstance(exc, (CredentialStoreError, PaymentConnectorError))
+            else "razorpay_reconciliation_unavailable"
+        )
+        raise HTTPException(status_code=503, detail=detail) from exc
     results: list[dict[str, Any]] = []
     for dispute in disputes:
         dispute_id = str(dispute.get("id") or "")

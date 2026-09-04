@@ -73,8 +73,14 @@ export function ConfirmDialog({
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal?.();
-    if (!open && dialog.open) dialog.close();
+    if (open && !dialog.open) {
+      if (dialog.showModal) dialog.showModal();
+      else dialog.setAttribute("open", "");
+    }
+    if (!open && dialog.open) {
+      if (dialog.close) dialog.close();
+      else dialog.removeAttribute("open");
+    }
   }, [open]);
   if (!open) return null;
   return (

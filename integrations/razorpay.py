@@ -17,6 +17,10 @@ class RazorpayConfigError(RuntimeError):
 class RazorpayRequestError(RuntimeError):
     """Raised when Razorpay returns an error or malformed response."""
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        self.status_code = status_code
+        super().__init__(message)
+
 
 class RazorpayClient:
     """Basic Auth client for Razorpay payment, dispute, and document APIs."""
@@ -53,6 +57,14 @@ class RazorpayClient:
 
     def get_order(self, order_id: str) -> dict[str, Any]:
         return self._object("GET", f"/orders/{order_id}")
+
+    def verify_credentials(self) -> None:
+        """Verify Basic Auth using a read-only, bounded collection request."""
+        response = self._object("GET", "/payments", params={"count": 1})
+        if response.get("entity") != "collection" or not isinstance(
+            response.get("items"), list
+        ):
+            raise RazorpayRequestError("Razorpay verification response was malformed.")
 
     def list_disputes(
         self,
@@ -134,7 +146,8 @@ class RazorpayClient:
         )
         if response.status_code >= 400:
             raise RazorpayRequestError(
-                f"Razorpay request failed with {response.status_code} for {method} {path}."
+                f"Razorpay request failed with {response.status_code} for {method} {path}.",
+                status_code=response.status_code,
             )
         try:
             return response.json()

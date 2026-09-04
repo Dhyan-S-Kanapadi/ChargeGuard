@@ -80,6 +80,8 @@ class MerchantResponse(BaseModel):
     name: str
     vertical: str
     payment_provider: str | None = None
+    payment_connector_id: str | None = None
+    payment_connector_ids: dict[str, str] = Field(default_factory=dict)
     razorpay_account_id: str | None = None
     shipping_provider: str | None = None
     support_connector_ref: str | None = None
@@ -103,6 +105,49 @@ class PlatformSuggestionRequest(BaseModel):
 
 class PlatformSuggestionResponse(BaseModel):
     suggestion: Literal["shopify", "woocommerce", "custom", "unknown"]
+
+
+class RazorpayConnectorCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key_id: str = Field(min_length=8, max_length=100, pattern=r"^rzp_(test|live)_[A-Za-z0-9]+$")
+    key_secret: str = Field(min_length=8, max_length=500)
+    razorpay_account_id: str = Field(min_length=5, max_length=100, pattern=r"^acc_[A-Za-z0-9]+$")
+
+    @field_validator("key_id", "key_secret", "razorpay_account_id")
+    @classmethod
+    def strip_connector_values(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped or any(character.isspace() for character in stripped):
+            raise ValueError("Payment credential fields must not contain whitespace.")
+        return stripped
+
+
+class StripeConnectorCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str = Field(min_length=8, max_length=500, pattern=r"^sk_(test|live)_[A-Za-z0-9_]+$")
+
+    @field_validator("api_key")
+    @classmethod
+    def strip_api_key(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped or any(character.isspace() for character in stripped):
+            raise ValueError("Stripe API key must not contain whitespace.")
+        return stripped
+
+
+class PaymentConnectorResponse(BaseModel):
+    connector_id: str
+    merchant_id: str
+    provider: Literal["razorpay", "stripe"]
+    provider_account_id: str | None = None
+    status: Literal["pending", "verified", "invalid", "disconnected"]
+    credential_hint: str
+    verified_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    last_error_code: str | None = None
 
 
 class OrderIngestRequest(BaseModel):

@@ -27,6 +27,8 @@ def test_docker_build_trains_model_and_uses_selected_port() -> None:
 def test_compose_provides_single_instance_persistent_data_volume() -> None:
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assert "CHARGEGUARD_STORE_PATH" in compose
+    assert "CHARGEGUARD_CREDENTIAL_STORE_PATH" in compose
+    assert "/var/data/chargeguard_payment_credentials.json" in compose
     assert "/var/data/chargeguard_store.json" in compose
     assert "chargeguard-data:/var/data" in compose
     assert "${PORT:-8000}:${PORT:-8000}" in compose
@@ -47,6 +49,9 @@ def test_env_example_has_safe_staging_placeholders() -> None:
     assert values["RAZORPAY_STARTUP_RECOVERY_LIMIT"] == "25"
     assert values["RAZORPAY_SIMULATOR_ENABLED"] == "false"
     assert values["CHARGEGUARD_STORE_PATH"] == ""
+    assert values["CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY"] == ""
+    assert values["CHARGEGUARD_CREDENTIAL_STORE_PATH"] == "./data/chargeguard_payment_credentials.json"
+    assert values["ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK"] == "false"
     assert values["CHARGEGUARD_USE_STUBS"] == "true"
     assert values["MODEL_PATH"] == "./ml/artifacts/win_probability_model.pkl"
 
