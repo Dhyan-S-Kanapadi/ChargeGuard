@@ -410,6 +410,10 @@ class RazorpaySimulatorTransition(BaseModel):
     force: bool = False
 
 
+class RazorpaySimulatorScenarioRun(BaseModel):
+    merchant_id: str = Field(min_length=1, max_length=100)
+
+
 class RazorpayReconciliationRequest(BaseModel):
     merchant_id: str = Field(min_length=1, max_length=100)
     from_timestamp: int | None = Field(default=None, ge=0)

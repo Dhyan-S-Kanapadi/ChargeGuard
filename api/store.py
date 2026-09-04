@@ -638,6 +638,20 @@ class InMemoryStore:
             self._save()
             return created
 
+    def create_order(self, order: OrderRecord) -> bool:
+        """Atomically create one merchant-scoped order without replacing an existing key."""
+        key = self._order_key(order["merchant_id"], order["order_id"])
+        with self._lock:
+            if key in self._orders:
+                return False
+            self._validate_order_identifiers(order, key)
+            value = deepcopy(order)
+            if self._order_has_dispute(order["merchant_id"], order["order_id"]):
+                value["is_disputed"] = True
+            self._orders[key] = value
+            self._save()
+            return True
+
     def _validate_order_identifiers(self, order: OrderRecord, key: str) -> None:
         merchant_id = order["merchant_id"]
         for field in ("provider_payment_id", "provider_order_id"):

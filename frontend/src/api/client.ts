@@ -11,6 +11,8 @@ import {
   OutcomeResponseSchema,
   PlatformSuggestionSchema,
   ProviderEventSchema,
+  SimulationRunResultSchema,
+  SimulationScenarioSchema,
   SimulatorDisputeSchema,
   StatsSchema,
   SummaryResponseSchema,
@@ -305,6 +307,21 @@ export class ApiClient {
     });
   }
 
+  simulationScenarios(signal?: AbortSignal) {
+    return this.request("/dev/razorpay-simulator/scenarios", {
+      schema: SimulationScenarioSchema.array(),
+      signal,
+    });
+  }
+
+  runSimulationScenario(scenarioId: string, merchantId: string) {
+    return this.request(`/dev/razorpay-simulator/scenarios/${encodeURIComponent(scenarioId)}/run`, {
+      method: "POST",
+      body: { merchant_id: merchantId },
+      schema: SimulationRunResultSchema,
+    });
+  }
+
   createSimulation(body: Record<string, unknown>) {
     return this.request("/dev/razorpay-simulator/disputes", {
       method: "POST",
@@ -330,7 +347,13 @@ const recoveryResultSchema = z.object({
   failed: z.number(),
 });
 const reconciliationResultSchema = z.object({ count: z.number(), results: z.array(z.record(z.string(), z.unknown())) });
-const simulatorResultSchema = z.object({ dispute_id: z.string(), event_id: z.string(), event_name: z.string() }).passthrough();
+const simulatorResultSchema = z.object({
+  dispute_id: z.string(),
+  event_id: z.string(),
+  event_name: z.string(),
+  order_seeded: z.boolean(),
+  delivery: z.object({ status_code: z.number(), body: z.string().optional() }).passthrough(),
+}).passthrough();
 const classificationResponseSchema = z.object({
   chargeback_id: z.string(),
   status: z.literal("scheduled"),
