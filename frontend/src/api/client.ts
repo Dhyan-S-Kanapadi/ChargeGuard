@@ -4,6 +4,7 @@ import {
   ClassificationSuggestionSchema,
   DisputeDetailSchema,
   DisputeSummarySchema,
+  DeviceRiskConnectorSchema,
   HealthSchema,
   MerchantSchema,
   PaymentConnectorSchema,
@@ -169,6 +170,35 @@ export class ApiClient {
     return this.request(`/merchants/${encodeURIComponent(merchantId)}/payment-connectors/${encodeURIComponent(connectorId)}`, {
       method: "DELETE",
       schema: PaymentConnectorSchema,
+    });
+  }
+
+  deviceRiskConnectors(merchantId: string, signal?: AbortSignal) {
+    return this.request(`/merchants/${encodeURIComponent(merchantId)}/device-risk-connectors`, {
+      schema: DeviceRiskConnectorSchema.array(),
+      signal,
+    });
+  }
+
+  connectSeon(merchantId: string, apiKey: string) {
+    return this.request(`/merchants/${encodeURIComponent(merchantId)}/device-risk-connectors/seon`, {
+      method: "POST",
+      body: { api_key: apiKey },
+      schema: DeviceRiskConnectorSchema,
+    });
+  }
+
+  verifyDeviceRiskConnector(merchantId: string, connectorId: string) {
+    return this.request(`/merchants/${encodeURIComponent(merchantId)}/device-risk-connectors/${encodeURIComponent(connectorId)}/verify`, {
+      method: "POST",
+      schema: DeviceRiskConnectorSchema,
+    });
+  }
+
+  disconnectDeviceRiskConnector(merchantId: string, connectorId: string) {
+    return this.request(`/merchants/${encodeURIComponent(merchantId)}/device-risk-connectors/${encodeURIComponent(connectorId)}`, {
+      method: "DELETE",
+      schema: DeviceRiskConnectorSchema,
     });
   }
 

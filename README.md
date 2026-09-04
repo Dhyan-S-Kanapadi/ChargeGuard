@@ -34,7 +34,7 @@ Implemented:
 - Razorpay and Stripe support with merchant-scoped encrypted payment connectors
 - Shipping evidence with Shiprocket and Delhivery support
 - Communications evidence with Freshdesk and Gmail reader support
-- Device evidence with SEON support
+- Device evidence with merchant-scoped encrypted SEON connectors
 - Consortium evidence with Ethoca and Verifi support
 - Food and quick-commerce evidence stubs
 - ML feature extraction
@@ -316,6 +316,8 @@ curl http://127.0.0.1:8001/merchants/merchant_demo/payment-connectors \
 
 Stripe uses `POST /merchants/{merchant_id}/payment-connectors/stripe` with `{"api_key":"<stripe-secret-key>"}`. Reconnecting verifies and stores a new connector before disconnecting its predecessor, so failed verification leaves the existing connector active. Deleting a connector detaches it and deletes its encrypted secret.
 
+SEON is configured per merchant through `POST /merchants/{merchant_id}/device-risk-connectors/seon` with `{"api_key":"<seon-api-key>"}`. The credential uses the shared encrypted connector store and never appears in merchant or dispute data. Because ChargeGuard has no documented non-billable verification request, a new or rotated connector remains `verification_pending` until its first real fraud check succeeds. The test-connection route explains this without sending a fraud check. Authentication failures invalidate the candidate and preserve a previous verified connector; timeouts and provider 5xx responses leave credentials pending and degrade evidence safely.
+
 ### Submit A Chargeback Webhook
 
 Use a future `filing_deadline`.
@@ -370,7 +372,7 @@ Core:
 | --- | --- |
 | `CHARGEGUARD_USE_STUBS` | Uses deterministic stub evidence when `true`. |
 | `CHARGEGUARD_STORE_PATH` | Optional JSON file path for local merchant and dispute persistence. |
-| `CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY` | Required Fernet key for merchant payment connectors. |
+| `CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY` | Required Fernet key for merchant payment and SEON connectors. |
 | `CHARGEGUARD_CREDENTIAL_STORE_PATH` | Separate encrypted credential-file path for the single-process pilot. |
 | `ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK` | Explicit local compatibility switch; defaults to `false`. |
 | `ANTHROPIC_API_KEY` | Claude API key for rebuttal and vision tasks. |
@@ -400,7 +402,8 @@ Providers:
 | `DELHIVERY_API_TOKEN` | Delhivery fallback shipment evidence. |
 | `FRESHDESK_API_KEY` / `FRESHDESK_DOMAIN` | Support ticket evidence. |
 | `GMAIL_ACCESS_TOKEN` / `GMAIL_USER_ID` | Gmail thread evidence. |
-| `SEON_API_KEY` | Device and fraud evidence. |
+| `SEON_API_KEY` | Deprecated local-only SEON fallback, used only with `ALLOW_GLOBAL_SEON_CREDENTIAL_FALLBACK=true`. |
+| `ALLOW_GLOBAL_SEON_CREDENTIAL_FALLBACK` | Explicitly allow the deprecated global SEON key only when no connector exists; defaults to false. |
 | `ETHOCA_API_KEY` / `ETHOCA_BASE_URL` | Ethoca consortium checks. |
 | `VERIFI_API_KEY` / `VERIFI_BASE_URL` | Verifi consortium checks. |
 
@@ -461,7 +464,7 @@ Evidence agents are built to prefer the configured merchant provider and fall ba
 - Fraud/device: SEON.
 - Consortium: Ethoca and Verifi.
 
-When `CHARGEGUARD_USE_STUBS=true`, deterministic evidence is returned without loading payment credentials. Live payment calls resolve only the verified connector owned by the dispute's merchant. Global Razorpay or Stripe credentials are considered only when `ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK=true` and that merchant has no connector reference; a broken configured connector never falls back.
+When `CHARGEGUARD_USE_STUBS=true`, deterministic evidence is returned without loading provider credentials. Live payment and SEON calls resolve only connectors owned by the dispute's merchant. Global credentials are considered only under their explicit fallback flags and only when that merchant has no configured connector; a broken configured connector never falls back. SEON failures produce unavailable device evidence and a degraded workflow instead of fabricated risk.
 
 ## Testing Against Real Providers
 
@@ -473,7 +476,7 @@ Generate the server-side Fernet key once and store it only in the deployment sec
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-On Render, mount a persistent disk at `/var/data`, set `CHARGEGUARD_CREDENTIAL_STORE_PATH=/var/data/chargeguard_payment_credentials.json`, and keep `CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY` in secret environment settings. Preserve the key across deploys; replacing it makes existing encrypted blobs unreadable. Rotate a provider credential through the same connection route, which verifies the candidate before switching the merchant reference.
+On Render, mount a persistent disk at `/var/data`, set `CHARGEGUARD_CREDENTIAL_STORE_PATH=/var/data/chargeguard_payment_credentials.json`, and keep `CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY` in secret environment settings. Preserve the key across deploys; replacing it makes existing encrypted blobs unreadable. Payment and SEON credentials share this encrypted file. It remains single-process pilot infrastructure; multi-worker production requires a managed vault behind `CredentialSecretStore`.
 
 The encrypted file adapter, JSON metadata store, and in-process locks require exactly one application process. Multi-worker production must migrate connector metadata to PostgreSQL and secrets to a managed vault while retaining the `CredentialSecretStore` interface.
 

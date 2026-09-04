@@ -23,6 +23,7 @@ export const MerchantSchema = z.object({
   payment_provider: z.string().nullable().optional(),
   payment_connector_id: z.string().nullable().optional(),
   payment_connector_ids: z.record(z.string(), z.string()).default({}),
+  device_risk_connector_id: z.string().nullable().optional(),
   razorpay_account_id: z.string().nullable().optional(),
   shipping_provider: z.string().nullable().optional(),
   support_connector_ref: z.string().nullable().optional(),
@@ -54,6 +55,19 @@ export const PaymentConnectorSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   last_error_code: z.string().nullable(),
+});
+
+export const DeviceRiskConnectorSchema = z.object({
+  connector_id: z.string(),
+  merchant_id: z.string(),
+  provider: z.literal("seon"),
+  status: z.enum(["verification_pending", "verified", "invalid", "disconnected"]),
+  credential_hint: z.string(),
+  verified_at: z.string().nullable(),
+  last_success_at: z.string().nullable(),
+  last_error_code: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
 });
 
 export const DisputeSummarySchema = z.object({
@@ -219,6 +233,7 @@ export const SimulatorDisputeSchema = z.object({
 export type Health = z.infer<typeof HealthSchema>;
 export type Merchant = z.infer<typeof MerchantSchema>;
 export type PaymentConnector = z.infer<typeof PaymentConnectorSchema>;
+export type DeviceRiskConnector = z.infer<typeof DeviceRiskConnectorSchema>;
 export type DisputeSummary = z.infer<typeof DisputeSummarySchema>;
 export type DisputeState = z.infer<typeof DisputeStateSchema>;
 export type DisputeDetail = z.infer<typeof DisputeDetailSchema>;

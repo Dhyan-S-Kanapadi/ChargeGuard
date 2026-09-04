@@ -1,4 +1,4 @@
-"""Encrypted merchant payment credentials for the single-process pilot."""
+"""Encrypted merchant provider credentials for the single-process pilot."""
 
 from __future__ import annotations
 

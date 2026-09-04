@@ -11,6 +11,7 @@ class MerchantProfile(TypedDict):
     payment_provider: NotRequired[Literal["razorpay", "stripe"]]
     payment_connector_id: NotRequired[str | None]
     payment_connector_ids: NotRequired[dict[str, str]]
+    device_risk_connector_id: NotRequired[str | None]
     razorpay_account_id: NotRequired[str | None]
     shipping_provider: NotRequired[Literal["shiprocket", "delhivery"]]
     support_connector_ref: NotRequired[str | None]
@@ -40,6 +41,19 @@ class PaymentConnector(TypedDict):
     created_at: datetime
     updated_at: datetime
     last_error_code: str | None
+
+
+class DeviceRiskConnector(TypedDict):
+    connector_id: str
+    merchant_id: str
+    provider: Literal["seon"]
+    status: Literal["verification_pending", "verified", "invalid", "disconnected"]
+    credential_hint: str
+    verified_at: datetime | None
+    last_success_at: datetime | None
+    last_error_code: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class OrderRecord(TypedDict):

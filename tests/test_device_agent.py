@@ -93,6 +93,7 @@ def test_device_live_override_marks_missing_credentials_degraded(monkeypatch) ->
     monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
     monkeypatch.setenv("SEON_USE_STUBS", "false")
     monkeypatch.delenv("SEON_API_KEY", raising=False)
+    monkeypatch.delenv("ALLOW_GLOBAL_SEON_CREDENTIAL_FALLBACK", raising=False)
 
     result = device_agent(_state())
 
@@ -144,6 +145,8 @@ def test_device_agent_marks_collection_failure_as_degraded(monkeypatch) -> None:
 
 
 def test_device_agent_collects_and_normalizes_seon(monkeypatch) -> None:
+    observed_merchants = []
+
     class FakeSeonClient:
         def fraud_check(self, payload: dict) -> dict:
             assert payload["ip"] == "49.36.18.22"
@@ -177,9 +180,10 @@ def test_device_agent_collects_and_normalizes_seon(monkeypatch) -> None:
     }
     monkeypatch.delenv("CHARGEGUARD_USE_STUBS", raising=False)
     monkeypatch.setattr(
-        device.SeonClient,
-        "from_env",
-        classmethod(lambda cls: FakeSeonClient()),
+        device.device_risk_client_factory,
+        "for_merchant",
+        lambda merchant: observed_merchants.append(merchant["merchant_id"])
+        or FakeSeonClient(),
     )
 
     result = device_agent(state)
@@ -191,3 +195,4 @@ def test_device_agent_collects_and_normalizes_seon(monkeypatch) -> None:
     assert result["device"]["login_pattern_normal"] is True
     assert result["device"]["vpn_detected"] is False
     assert result["device"]["raw"]["source"] == "seon"
+    assert observed_merchants == ["merchant_001"]
