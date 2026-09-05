@@ -271,6 +271,34 @@ def test_prompt_uses_only_allowlisted_normalized_facts() -> None:
     assert facts["shipping"]["delivered"] is True
 
 
+def test_actual_shipping_category_and_nonfinite_values() -> None:
+    state = _state()
+    state["shipping"]["status_category"] = "CONFIRMED_DELIVERED"
+    state["device"]["fraud_score"] = float("nan")
+    state["dispute_amount"] = float("inf")
+    facts = decision_review_facts(state)
+    assert facts["shipping"]["delivered"] is True
+    assert facts["device_risk"]["fraud_score"] is None
+    assert facts["dispute_amount"] is None
+    json.dumps(facts, allow_nan=False)
+
+
+def test_configured_reasoning_effort_is_sent() -> None:
+    def handler(request):
+        payload = json.loads(request.content)
+        assert payload["reasoning_effort"] == "low"
+        assert payload["max_tokens"] == 1500
+        schema = json.loads(payload["messages"][0]["content"].split("Required JSON schema:\n")[1])
+        assert schema["properties"]["confidence"]["type"] == "number"
+        assert schema["properties"]["confidence"]["maximum"] == 1
+        assert schema["additionalProperties"] is False
+        return httpx.Response(200, json={"choices": [{"message": {"content": _result_json()}}]})
+    client = DecisionReviewClient(base_url="https://example.test/v1", model="test",
+                                  reasoning_effort="low", max_tokens=1500,
+                                  client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert client.review(decision_review_facts(_state())).recommendation == "FIGHT"
+
+
 @pytest.mark.parametrize(
     ("decision", "review_behavior", "expected_route"),
     [

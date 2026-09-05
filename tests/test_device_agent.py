@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import pytest
 
 from agents.evidence import device
 from agents.evidence.device import _build_device_evidence, device_agent
@@ -196,3 +197,41 @@ def test_device_agent_collects_and_normalizes_seon(monkeypatch) -> None:
     assert result["device"]["vpn_detected"] is False
     assert result["device"]["raw"]["source"] == "seon"
     assert observed_merchants == ["merchant_001"]
+
+
+def test_zero_coordinates_and_string_false_are_preserved() -> None:
+    state = _state()
+    state["shipping"] = {"delivery_latitude": 0.0, "delivery_longitude": 0.0}
+    evidence = _build_device_evidence({
+        "fraud_score": 20, "ip_details": {"latitude": 0, "longitude": 0, "is_vpn": "false"},
+        "login_pattern_normal": "false",
+    }, state=state)
+    assert evidence["geolocation_match"] is True
+    assert evidence["vpn_detected"] is False
+    assert evidence["login_pattern_normal"] is False
+
+
+@pytest.mark.parametrize("score", [None, "NaN", "Infinity", "garbage"])
+def test_invalid_score_degrades_instead_of_creating_safe_evidence(monkeypatch, score) -> None:
+    monkeypatch.setattr(device, "_collect_device_data", lambda state: ({"fraud_score": score}, "seon"))
+    result = device_agent(_state())
+    assert result["device"] is None
+    assert result["evidence_collection_degraded"] is True
+
+
+@pytest.mark.parametrize("environment,enabled,merchant,payment", [
+    ("production", "true", "merchant_001", "pay_demo_001"),
+    ("development", "false", "merchant_001", "pay_demo_001"),
+    ("development", "true", "other_merchant", "pay_demo_001"),
+    ("development", "true", "merchant_001", "other_payment"),
+])
+def test_simulation_fixture_requires_environment_and_ownership(monkeypatch, environment, enabled, merchant, payment) -> None:
+    state = _state()
+    state["chargeback_id"] = "disp_SIM_boundary"
+    monkeypatch.setenv("ENVIRONMENT", environment)
+    monkeypatch.setenv("RAZORPAY_SIMULATOR_ENABLED", enabled)
+    monkeypatch.setenv("SEON_USE_STUBS", "true")
+    monkeypatch.setattr(device.store, "get_simulator_dispute", lambda case_id: {
+        "merchant_id": merchant, "payment_id": payment, "scenario_id": "device-vpn-mismatch",
+    })
+    assert device_agent(state)["device"]["fraud_score"] == 18

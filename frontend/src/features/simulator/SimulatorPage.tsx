@@ -24,7 +24,7 @@ function titleCase(value: string) {
 }
 
 export function SimulatorPage() {
-  const { client } = useConnection();
+  const { client, isDemo } = useConnection();
   const qc = useQueryClient();
   const merchants = useQuery({
     queryKey: ["merchants"],
@@ -43,7 +43,7 @@ export function SimulatorPage() {
   const razorpayMerchants = merchants.data?.filter(
     merchant => merchant.payment_provider === "razorpay" && merchant.razorpay_account_id,
   ) ?? [];
-  const [merchantId, setMerchantId] = useState("");
+  const [merchantId, setMerchantId] = useState(isDemo ? "merchant_reviewer_demo" : "");
   const [scenarioId, setScenarioId] = useState("");
   const [ids, setIds] = useState(freshIds);
   const [notice, setNotice] = useState("");
@@ -146,7 +146,8 @@ export function SimulatorPage() {
             <dl>
               <div><dt>Rail</dt><dd>{selectedScenario.payload.method.toUpperCase()}</dd></div>
               <div><dt>Network / reason</dt><dd>{selectedScenario.payload.card_network ?? "none"} / {selectedScenario.payload.network_reason_code ?? "none"}</dd></div>
-              <div><dt>Amount</dt><dd>{formatMoney(selectedScenario.payload.dispute_amount_paise / 100, selectedScenario.payload.currency)}</dd></div>
+              <div><dt>Payment amount</dt><dd>{formatMoney(selectedScenario.payload.payment_amount_paise / 100, selectedScenario.payload.currency)}</dd></div>
+              <div><dt>Disputed amount</dt><dd>{formatMoney(selectedScenario.payload.dispute_amount_paise / 100, selectedScenario.payload.currency)}</dd></div>
               <div><dt>Deadline</dt><dd>{selectedScenario.payload.respond_within_hours} hours</dd></div>
             </dl>
             <strong>Expected</strong>
@@ -159,7 +160,7 @@ export function SimulatorPage() {
         </div>}
       </Panel>
 
-      <Panel title="Manual supported-card case">
+      {!isDemo ? <Panel title="Manual supported-card case">
         <form className="form-grid" onSubmit={submitManual} key={`${ids.payment}:${ids.order}`}>
           <label>Merchant
             <select name="merchant_id" required defaultValue={merchantId} onChange={event => setMerchantId(event.target.value)}>
@@ -181,7 +182,7 @@ export function SimulatorPage() {
           <Button type="submit" loading={create.isPending}><FlaskConical />Create manual test dispute</Button>
           {create.error ? <ErrorState error={create.error} /> : null}
         </form>
-      </Panel>
+      </Panel> : <Panel title="Public demo"><p>Choose any catalog scenario. Manual creation and lifecycle mutations are operator-only. Open Disputes to inspect your results and advisory review.</p></Panel>}
     </div>
 
     {notice ? <p className="success-box sim-notice" role="status">{notice}</p> : null}
@@ -200,7 +201,7 @@ export function SimulatorPage() {
           <Badge tone="warning">TEST · {simulation.state}</Badge>
           <b>{formatMoney(simulation.dispute_amount_paise / 100, simulation.currency)}</b>
           <small>Created {formatDate(simulation.created_at)}</small>
-          {legalTransitions[simulation.state]?.length ? <div className="button-row sim-transitions">
+          {!isDemo && legalTransitions[simulation.state]?.length ? <div className="button-row sim-transitions">
             {legalTransitions[simulation.state].map(state => <Button
               key={state}
               type="button"

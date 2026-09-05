@@ -28,4 +28,22 @@ describe("connection screen", () => {
     await userEvent.click(screen.getByRole("button", { name: "Test and connect" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("API key was rejected");
   });
+
+  it("enters public demo without storing or sending an operator key", async () => {
+    const calls: Array<{url: string; headers: Headers}> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, headers: new Headers(init?.headers) });
+      const body = url.endsWith("/demo/status") ? { enabled: true } :
+        url.endsWith("/demo/session") ? { session_token: "restricted-demo-token", expires_in: 3600 } :
+        { status: "ok", model_loaded: true, stub_mode: true };
+      return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
+    }));
+    render(<ConnectionProvider><Harness /></ConnectionProvider>);
+    await userEvent.click(await screen.findByRole("button", { name: "Try Demo" }));
+    expect(await screen.findByText("Connected workspace")).toBeInTheDocument();
+    expect(calls.every(call => !call.headers.has("X-API-Key"))).toBe(true);
+    expect(calls.find(call => call.url.endsWith("/demo/session"))?.headers.get("X-Demo-Request")).toBe("1");
+    expect(JSON.stringify(sessionStorage) + JSON.stringify(localStorage)).not.toContain("restricted-demo-token");
+  });
 });

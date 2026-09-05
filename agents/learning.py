@@ -20,6 +20,8 @@ def _default_outcome_reason(state: ChargebackState) -> str:
 def learning_agent(state: ChargebackState) -> ChargebackState:
     """Record feedback only after a terminal WIN or LOSS outcome."""
     logger.info("Running learning agent for %s", state["chargeback_id"])
+    if state["chargeback_id"].startswith("disp_SIM_"):
+        return state
 
     if state.get("final_outcome") not in {"WIN", "LOSS"}:
         logger.info("Skipping learning for non-terminal chargeback %s", state["chargeback_id"])

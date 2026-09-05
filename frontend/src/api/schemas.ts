@@ -279,6 +279,11 @@ export const SimulationRunResultSchema = z.object({
   })),
 });
 
+export const LlmStatusSchema = z.object({
+  guard_ai: z.object({ mode: z.enum(["stub", "live_configured", "unavailable", "disabled"]), model: z.string().nullable() }),
+  decision_review: z.object({ mode: z.enum(["stub", "live_configured", "unavailable", "disabled"]), model: z.string().nullable() }),
+});
+
 export type Health = z.infer<typeof HealthSchema>;
 export type Merchant = z.infer<typeof MerchantSchema>;
 export type PaymentConnector = z.infer<typeof PaymentConnectorSchema>;

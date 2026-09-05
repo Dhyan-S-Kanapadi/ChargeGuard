@@ -7,7 +7,7 @@ import json
 import os
 import secrets
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -203,11 +203,13 @@ def _seed_simulator_order(record: dict[str, Any]) -> None:
     """Give the real graph an exact merchant-owned order to correlate."""
     merchant_id = record["merchant_id"]
     suffix = record["dispute_id"].removeprefix("disp_SIM_")
+    scenario = get_simulation_scenario(record.get("scenario_id", ""))
+    profile = (scenario.get("device") or {}) if scenario else {}
     order: OrderRecord = {
         "order_id": record["order_id"],
         "merchant_id": merchant_id,
         "customer_email": record.get("customer_email") or f"simulator+{suffix}@example.test",
-        "customer_ip": "192.0.2.10",
+        "customer_ip": profile.get("ip", "192.0.2.10"),
         "user_agent": "ChargeGuard-Simulator/1.0",
         "shipping_address": "Synthetic simulator address, Bengaluru",
         "order_date": record["created_at"],
@@ -324,6 +326,15 @@ def run_scenario(
     scenario_id: str,
     payload: RazorpaySimulatorScenarioRun,
 ) -> dict[str, Any]:
+    return execute_scenario(scenario_id, payload)
+
+
+def execute_scenario(
+    scenario_id: str,
+    payload: RazorpaySimulatorScenarioRun,
+    *,
+    on_created: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     _require_simulator()
     scenario = get_simulation_scenario(scenario_id)
     if scenario is None:
@@ -351,6 +362,8 @@ def run_scenario(
         account_id=account_id,
     )
 
+    if on_created is not None:
+        on_created(record["dispute_id"])
     if behavior == "invalid_signature":
         event_id, body = _prepared_event(record, "payment.dispute.created", "open")
         result = {

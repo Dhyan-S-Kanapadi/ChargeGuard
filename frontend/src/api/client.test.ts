@@ -1,10 +1,20 @@
 // @vitest-environment node
 import { http, HttpResponse } from "msw";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { ApiClient, joinUrl } from "./client";
 import { server } from "../test/server";
 
 describe("ApiClient", () => {
+  it("routes session traffic only to the restricted demo surface", async () => {
+    server.use(http.get("http://localhost/demo/stats", ({ request }) => {
+      expect(request.headers.get("X-Demo-Session")).toBe("restricted-token");
+      expect(request.headers.has("X-API-Key")).toBe(false);
+      return HttpResponse.json({ total_disputes_processed: 0,
+        decisions: { FIGHT: 0, ACCEPT: 0, ESCALATE_DEGRADED: 0 }, win_rate: null,
+        average_expected_value: null, evidence_collection_degraded_count: 0 });
+    }));
+    await new ApiClient("http://localhost", "", 12000, "restricted-token").stats();
+  });
   beforeAll(() => {
     Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { origin: "http://localhost" }, setTimeout, clearTimeout } });
   });
@@ -71,6 +81,31 @@ describe("ApiClient", () => {
       actor_id: "operator-1",
       suggestion_id: "rcs_1",
     });
+  });
+
+  it("allows longer AI requests and validates authenticated LLM status", async () => {
+    const timers = vi.spyOn(window, "setTimeout");
+    server.use(
+      http.post("http://localhost/assistant/query", () => HttpResponse.json({
+        answer: "Synthetic case summary.", based_on: { dispute_count: 1, stats_snapshot: true },
+      })),
+      http.get("http://localhost/assistant/status", ({ request }) => {
+        expect(request.headers.get("X-API-Key")).toBe("key");
+        return HttpResponse.json({
+          guard_ai: { mode: "live_configured", model: "test-model" },
+          decision_review: { mode: "disabled", model: null },
+        });
+      }),
+    );
+    try {
+      const client = new ApiClient("http://localhost", "key");
+      await client.askAssistant("Explain this synthetic case");
+      expect(timers).toHaveBeenCalledWith(expect.any(Function), 35000);
+      expect((await client.llmStatus()).guard_ai.mode).toBe("live_configured");
+      expect(timers).toHaveBeenCalledWith(expect.any(Function), 12000);
+    } finally {
+      timers.mockRestore();
+    }
   });
 
   it("loads and runs validated simulator catalog scenarios", async () => {

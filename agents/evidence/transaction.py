@@ -5,11 +5,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from core.state import ChargebackState, TransactionEvidence
-from integrations.razorpay import RazorpayClient, RazorpayConfigError
-from integrations.stripe import StripeClient, StripeConfigError
+from integrations.razorpay import RazorpayClient as RazorpayClient, RazorpayConfigError
+from integrations.stripe import StripeClient as StripeClient, StripeConfigError
 from integrations.credential_secrets import CredentialStoreError
 from integrations.payment_client_factory import PaymentClientFactory, PaymentConnectorError
 from api.store import store
+from api.simulation_scenarios import get_simulation_scenario, simulation_record_for_state
 
 
 logger = logging.getLogger(__name__)
@@ -245,11 +246,14 @@ def _empty_transaction_evidence(
 def _stub_payment_response(state: ChargebackState) -> dict[str, Any]:
     payment_id = state.get("payment_id") or f"pay_{state['chargeback_id']}"
     order_id = state.get("provider_order_id") or state.get("order_id") or f"order_{state['chargeback_id']}"
+    record = simulation_record_for_state(state)
+    scenario = get_simulation_scenario(record.get("scenario_id", "")) if record else None
+    profile = (scenario.get("device") or {}) if scenario else {}
 
     return {
         "id": payment_id,
         "order_id": order_id,
-        "amount": int(state["dispute_amount"] * 100),
+        "amount": record["payment_amount_paise"] if record else round(state["dispute_amount"] * 100),
         "currency": state["currency"],
         "email": "customer@example.com",
         "method": "card",
@@ -261,8 +265,8 @@ def _stub_payment_response(state: ChargebackState) -> dict[str, Any]:
             "auth_code": "123456",
         },
         "notes": {
-            "device_id": "device_demo_123",
-            "ip_address": "49.36.18.22",
+            "device_id": profile.get("device_id", "device_demo_123"),
+            "ip_address": profile.get("ip", "192.0.2.10"),
         },
         "three_ds_authenticated": True,
         "otp_verified": True,

@@ -131,7 +131,7 @@ function Heading() {
 }
 
 function DetailDrawer({ id, close, invalidate }: { id: string; close: () => void; invalidate: () => Promise<unknown> }) {
-  const { client } = useConnection();
+  const { client, isDemo } = useConnection();
   const detail = useQuery({ queryKey: ["dispute", id], queryFn: ({ signal }) => client.dispute(id, signal) });
   const summary = useQuery({ queryKey: ["summary", id], queryFn: ({ signal }) => client.summary(id, signal), enabled: false, retry: false });
   const [confirm, setConfirm] = useState<"WIN" | "LOSS" | "">("");
@@ -153,14 +153,14 @@ function DetailDrawer({ id, close, invalidate }: { id: string; close: () => void
       {detail.isLoading ? <Skeleton lines={10} /> : detail.error ? <ErrorState error={detail.error} retry={() => void detail.refetch()} /> : detail.data ? <div className="detail-body">
         <section className="detail-hero"><span><small>Claim amount</small><strong>{formatMoney(detail.data.state.dispute_amount, detail.data.state.currency)}</strong></span><Badge tone={recommendationTone(detail.data.state.decision)}>{detail.data.state.decision ?? "PENDING"} recommendation</Badge></section>
         {detail.data.state.evidence_collection_degraded ? <div className="warning-box"><AlertTriangle />Evidence collection is degraded: {detail.data.state.degraded_reasons.join(", ") || "reason unavailable"}</div> : null}
-        {classificationSuggestionEligible(detail.data) ? <ClassificationAssistant item={detail.data} onChanged={async () => { await Promise.all([detail.refetch(), invalidate()]); }} /> : null}
+        {!isDemo && classificationSuggestionEligible(detail.data) ? <ClassificationAssistant item={detail.data} onChanged={async () => { await Promise.all([detail.refetch(), invalidate()]); }} /> : null}
         <dl className="detail-grid"><Field label="Processing status" value={detail.data.status} /><Field label="Network outcome" value={detail.data.state.final_outcome ?? "Not adjudicated"} /><Field label="Confidence" value={formatPercent(detail.data.state.win_probability)} /><Field label="Expected value" value={detail.data.state.expected_value == null ? "Unavailable" : formatMoney(detail.data.state.expected_value, detail.data.state.currency)} /><Field label="Filing deadline" value={formatDate(detail.data.state.filing_deadline)} /><Field label="Filed at" value={formatDate(detail.data.state.filed_at)} /><Field label="Merchant" value={detail.data.state.merchant_profile.name} /><Field label="Reason" value={detail.data.state.provider_reason_code || detail.data.state.reason_code} /><Field label="Payment ID" value={detail.data.state.payment_id ?? "Unavailable"} /><Field label="Order ID" value={detail.data.state.order_id ?? "Unavailable"} /></dl>
         <Section title="Decision reasoning" value={detail.data.state.decision_reasoning} />
         <DecisionReviewCard state={detail.data.state} />
         <Section title="Contradiction summary" value={detail.data.state.contradiction_summary} />
         <Panel title="Evidence checklist">{["transaction", "shipping", "comms", "device", "consortium", "delivery_photo", "order_timeline"].map((key) => <span className="check-item" key={key}>{detail.data!.state[key as keyof typeof detail.data.state] ? "✓" : "—"} {key.replaceAll("_", " ")}</span>)}</Panel>
-        <Panel title="Human review summary" action={<Button variant="secondary" onClick={() => void summary.refetch()} loading={summary.isFetching}><FileText />Generate</Button>}>{summary.error ? <ErrorState error={summary.error} retry={() => void summary.refetch()} /> : <p>{summary.data?.human_review_summary ?? detail.data.state.human_review_summary ?? "Generate a grounded summary when needed."}</p>}</Panel>
-        {outcomeEligible(detail.data) ? <Panel title="Record final card-network outcome"><p>This is separate from ChargeGuard’s {detail.data.state.decision} recommendation.</p><div className="button-row"><Button onClick={() => setConfirm("WIN")}>Record WIN</Button><Button variant="danger" onClick={() => setConfirm("LOSS")}>Record LOSS</Button></div></Panel> : null}
+        <Panel title="Human review summary" action={!isDemo ? <Button variant="secondary" onClick={() => void summary.refetch()} loading={summary.isFetching}><FileText />Generate</Button> : undefined}>{summary.error ? <ErrorState error={summary.error} retry={() => void summary.refetch()} /> : <p>{summary.data?.human_review_summary ?? detail.data.state.human_review_summary ?? "Generate a grounded summary when needed."}</p>}</Panel>
+        {!isDemo && outcomeEligible(detail.data) ? <Panel title="Record final card-network outcome"><p>This is separate from ChargeGuard’s {detail.data.state.decision} recommendation.</p><div className="button-row"><Button onClick={() => setConfirm("WIN")}>Record WIN</Button><Button variant="danger" onClick={() => setConfirm("LOSS")}>Record LOSS</Button></div></Panel> : null}
         {success ? <p className="success-box" role="status">{success}</p> : null}
         {outcome.error ? <ErrorState error={outcome.error} /> : null}
       </div> : null}

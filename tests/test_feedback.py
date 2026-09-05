@@ -64,6 +64,21 @@ def test_feedback_is_idempotent_by_chargeback_id(monkeypatch, tmp_path) -> None:
     assert records[0]["outcome"] == "LOSS"
 
 
+@pytest.mark.parametrize("outcome", ["WIN", "LOSS"])
+def test_simulator_outcomes_never_write_training_data(monkeypatch, tmp_path, outcome) -> None:
+    from agents.learning import learning_agent
+
+    _configure(monkeypatch, tmp_path)
+    state = _state()
+    state["chargeback_id"] = "disp_SIM_learning_test"
+    state["final_outcome"] = outcome
+    learning_agent(state)
+    with pytest.raises(ValueError, match="synthetic simulator"):
+        record_outcome(state)
+    assert not (tmp_path / "outcomes.json").exists()
+    assert not (tmp_path / "model.pkl").exists()
+
+
 def test_feedback_retrains_after_threshold(monkeypatch, tmp_path) -> None:
     _configure(monkeypatch, tmp_path, threshold=10)
 

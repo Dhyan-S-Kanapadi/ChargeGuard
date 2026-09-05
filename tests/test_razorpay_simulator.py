@@ -23,18 +23,28 @@ def _payload():
 
 
 def test_simulator_is_disabled_by_default(monkeypatch) -> None:
-    store.clear(); monkeypatch.setenv("API_KEY", "key"); monkeypatch.delenv("RAZORPAY_SIMULATOR_ENABLED", raising=False); monkeypatch.delenv("CHARGEBACK_SIMULATOR_ENABLED", raising=False)
+    store.clear()
+    monkeypatch.setenv("API_KEY", "key")
+    monkeypatch.delenv("RAZORPAY_SIMULATOR_ENABLED", raising=False)
+    monkeypatch.delenv("CHARGEBACK_SIMULATOR_ENABLED", raising=False)
     assert TestClient(app).get("/dev/razorpay-simulator/disputes", headers={"X-API-Key": "key"}).status_code == 404
 
 
 def test_simulator_is_disabled_in_production_even_when_enabled(monkeypatch) -> None:
-    store.clear(); monkeypatch.setenv("API_KEY", "key"); monkeypatch.setenv("RAZORPAY_SIMULATOR_ENABLED", "true"); monkeypatch.setenv("ENVIRONMENT", "production")
+    store.clear()
+    monkeypatch.setenv("API_KEY", "key")
+    monkeypatch.setenv("RAZORPAY_SIMULATOR_ENABLED", "true")
+    monkeypatch.setenv("ENVIRONMENT", "production")
     assert TestClient(app).get("/dev/razorpay-simulator/disputes", headers={"X-API-Key": "key"}).status_code == 404
 
 
 def test_simulator_create_and_lifecycle(monkeypatch) -> None:
-    store.clear(); assert store.create_merchant(_merchant())
-    monkeypatch.setenv("API_KEY", "key"); monkeypatch.setenv("RAZORPAY_SIMULATOR_ENABLED", "true"); monkeypatch.setenv("ENVIRONMENT", "development"); monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "secret")
+    store.clear()
+    assert store.create_merchant(_merchant())
+    monkeypatch.setenv("API_KEY", "key")
+    monkeypatch.setenv("RAZORPAY_SIMULATOR_ENABLED", "true")
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "secret")
     monkeypatch.setattr(razorpay_simulator, "_deliver", lambda record, event, state: {"event_id": "evt_" + state, "event_name": event, "delivery": {"status_code": 202}, "payload_sha256": "hash"})
     monkeypatch.setattr(razorpay_simulator, "_await_provider_event", lambda event_id: None)
     client = TestClient(app, headers={"X-API-Key": "key"})
@@ -54,7 +64,8 @@ def test_simulator_create_and_lifecycle(monkeypatch) -> None:
 def test_simulator_delivery_signs_exact_body_with_mock_transport() -> None:
     seen = {}
     def handler(request: httpx.Request) -> httpx.Response:
-        seen["body"] = request.content; seen["signature"] = request.headers["X-Razorpay-Signature"]
+        seen["body"] = request.content
+        seen["signature"] = request.headers["X-Razorpay-Signature"]
         return httpx.Response(202, text="accepted")
     body = b'{"entity":"event"}'
     result = razorpay_simulator.deliver_simulator_event("http://127.0.0.1:8000/webhook/razorpay", body, "evt_SIM_x", "secret", client=httpx.Client(transport=httpx.MockTransport(handler)))
@@ -130,8 +141,9 @@ def test_scenario_catalog_has_four_examples_per_family(monkeypatch) -> None:
 
     assert response.status_code == 200
     scenarios = response.json()
-    assert len(scenarios) == 24
-    assert len({scenario["id"] for scenario in scenarios}) == 24
+    assert len(scenarios) == 32
+    assert len({scenario["id"] for scenario in scenarios}) == 32
+    assert len({scenario["payload"]["dispute_amount_paise"] for scenario in scenarios}) == 32
     assert Counter(scenario["family"] for scenario in scenarios) == {
         "Decision routing": 4,
         "Network playbooks": 4,
@@ -139,6 +151,8 @@ def test_scenario_catalog_has_four_examples_per_family(monkeypatch) -> None:
         "Webhook trust": 4,
         "Provider lifecycle": 4,
         "Automation boundaries": 4,
+        "Device and IP": 4,
+        "Device failures": 4,
     }
 
 
@@ -246,9 +260,15 @@ def test_catalog_special_delivery_behaviors(
         assert record["account_id"].startswith("acc_SIM_UNKNOWN_")
 
 
+@pytest.mark.parametrize("scenario_id", [
+    None, "friendly-fraud-high-value", "low-value-delivered", "manual-partial-dispute",
+    "device-consistent", "device-new-mobile", "device-vpn-mismatch", "device-travelling",
+    "device-timeout", "device-missing-ip", "device-invalid-response", "device-auth-failure",
+])
 def test_simulator_create_reaches_completed_graph_with_exact_order_correlation(
     monkeypatch,
     tmp_path,
+    scenario_id,
 ) -> None:
     store.clear()
     assert store.create_merchant(_merchant())
@@ -263,6 +283,7 @@ def test_simulator_create_reaches_completed_graph_with_exact_order_correlation(
     monkeypatch.setenv("MODEL_PATH", str(model_path))
     monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(tmp_path / "rebuttals"))
     monkeypatch.setenv("DECISION_REVIEW_ENABLED", "false")
+    monkeypatch.setenv("SEON_USE_STUBS", "true")
     webhook_client = TestClient(app)
 
     def deliver_locally(
@@ -304,20 +325,51 @@ def test_simulator_create_reaches_completed_graph_with_exact_order_correlation(
         "razorpay_reason_code": "product_not_received",
     }
 
-    response = TestClient(app, headers={"X-API-Key": "key"}).post(
-        "/dev/razorpay-simulator/disputes",
-        json=payload,
-    )
+    client = TestClient(app, headers={"X-API-Key": "key"})
+    if scenario_id:
+        response = client.post(f"/dev/razorpay-simulator/scenarios/{scenario_id}/run",
+                               json={"merchant_id": "merchant_sim"})
+    else:
+        response = client.post("/dev/razorpay-simulator/disputes", json=payload)
 
     assert response.status_code == 200
     result = response.json()
-    assert result["delivery"]["status_code"] == 202
+    delivery = result["deliveries"][0]["delivery"] if scenario_id else result["delivery"]
+    assert delivery["status_code"] == 202
     dispute = store.get_dispute(result["dispute_id"])
     assert dispute is not None
     assert dispute["status"] == "completed"
-    assert dispute["state"]["commerce_order_id"] == "order_sim"
+    record = store.get_simulator_dispute(result["dispute_id"])
+    assert dispute["state"]["commerce_order_id"] == record["order_id"]
+    assert dispute["state"]["dispute_amount"] == record["dispute_amount_paise"] / 100
+    assert dispute["state"]["transaction"]["amount"] == record["payment_amount_paise"] / 100
     assert dispute["state"]["tracking_id"].startswith("trk_SIM_")
     assert "commerce_order_correlation_unavailable" not in dispute["state"]["degraded_reasons"]
+    if scenario_id in {"device-timeout", "device-missing-ip", "device-invalid-response", "device-auth-failure"}:
+        assert dispute["state"]["device"] is None
+        assert dispute["state"]["decision"] == "ESCALATE_DEGRADED"
+        assert "device_provider_unavailable" in dispute["state"]["degraded_reasons"]
+        assert dispute["state"]["filed_at"] is None
+        return
+    expected_signals = {
+        "device-consistent": (8, False, True),
+        "device-new-mobile": (22, False, True),
+        "device-vpn-mismatch": (91, True, False),
+        "device-travelling": (35, False, False),
+    }
+    if scenario_id in expected_signals:
+        from ml.features import features_from_state
+
+        score, vpn, geo = expected_signals[scenario_id]
+        signals = features_from_state(dispute["state"])
+        assert (signals["fraud_score"], signals["vpn_detected"], signals["geolocation_match"]) == (score, vpn, geo)
+        order = store.get_order("merchant_sim", record["order_id"])
+        assert dispute["state"]["transaction"]["ip_address"] == order["customer_ip"]
+    if scenario_id == "low-value-delivered":
+        assert dispute["state"]["decision"] == "ACCEPT"
+        assert dispute["state"]["final_outcome"] == "ACCEPTED_NO_CONTEST"
+        assert dispute["state"]["filed_at"] is None
+        return
     assert dispute["state"]["decision"] == "FIGHT"
     assert dispute["state"]["quality_approved"] is True
     assert dispute["state"]["filing_confirmation"].startswith("filed_")

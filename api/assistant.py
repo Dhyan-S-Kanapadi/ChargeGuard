@@ -14,7 +14,14 @@ from api.disputes import _redact_state
 from api.schemas import AssistantQuery, AssistantResponse
 from api.stats import build_stats
 from api.store import store
-from integrations.portfolio_assistant import generate_portfolio_answer
+from integrations.portfolio_assistant import (
+    PortfolioAssistantClient, PortfolioAssistantConfigError,
+    generate_portfolio_answer, portfolio_assistant_uses_stubs,
+)
+from integrations.decision_review import (
+    DecisionReviewClient, DecisionReviewConfigError,
+    decision_review_enabled, decision_review_uses_stubs,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -62,6 +69,8 @@ def reset_assistant_rate_limiter() -> None:
 
 def _summary_from_record(record: dict[str, Any]) -> dict[str, Any]:
     state = _redact_state(record["state"])
+    deadline = state.get("filing_deadline")
+    device = state.get("device") or {}
     return {
         "chargeback_id": record["chargeback_id"],
         "decision": state.get("decision"),
@@ -69,7 +78,13 @@ def _summary_from_record(record: dict[str, Any]) -> dict[str, Any]:
         "expected_value": state.get("expected_value"),
         "final_outcome": state.get("final_outcome"),
         "contradiction_summary": state.get("contradiction_summary"),
-        "decision_reasoning": state.get("decision_reasoning"),
+        "decision_reasoning": str(state.get("decision_reasoning") or "")[:600],
+        "filing_deadline": deadline.isoformat() if hasattr(deadline, "isoformat") else deadline,
+        "dispute_amount": state.get("dispute_amount"),
+        "currency": state.get("currency"),
+        "synthetic": record["chargeback_id"].startswith("disp_SIM_"),
+        "degraded_reasons": [str(reason)[:100] for reason in state.get("degraded_reasons", [])[:12]],
+        "device_risk": {key: device.get(key) for key in ("fraud_score", "vpn_detected", "geolocation_match")},
     }
 
 
@@ -85,13 +100,13 @@ def build_assistant_context(chargeback_id: str | None = None) -> dict[str, Any]:
         if requested_record is not None:
             selected.append(requested_record)
     for record in records:
-        if len(selected) >= 50:
+        if len(selected) >= 20 or requested_record is not None:
             break
         if record is not requested_record:
             selected.append(record)
     context = {
         "stats": build_stats(records),
-        "disputes": [_summary_from_record(record) for record in selected[:50]],
+        "disputes": [_summary_from_record(record) for record in selected[:20]],
     }
     if chargeback_id:
         context["requested_chargeback_id"] = chargeback_id
@@ -108,9 +123,33 @@ def query_assistant(
     try:
         answer = generate_portfolio_answer(payload.question, context)
     except Exception as exc:
-        logger.warning("Portfolio assistant generation failed: %s", exc)
+        logger.warning("Portfolio assistant generation failed (%s)", type(exc).__name__)
         raise HTTPException(status_code=503, detail="Portfolio assistant is unavailable.") from exc
     return AssistantResponse(
         answer=answer,
         based_on={"dispute_count": len(context["disputes"]), "stats_snapshot": True},
     )
+
+
+@router.get("/status")
+def llm_status() -> dict[str, dict[str, str | None]]:
+    """Authenticated configuration status; does not send a billable provider request."""
+    if portfolio_assistant_uses_stubs():
+        chat = {"mode": "stub", "model": None}
+    else:
+        try:
+            client = PortfolioAssistantClient.from_env()
+            chat = {"mode": "live_configured", "model": client.model}
+        except PortfolioAssistantConfigError:
+            chat = {"mode": "unavailable", "model": None}
+    if not decision_review_enabled():
+        review = {"mode": "disabled", "model": None}
+    elif decision_review_uses_stubs():
+        review = {"mode": "stub", "model": "decision-review-stub-v1"}
+    else:
+        try:
+            client = DecisionReviewClient.from_env()
+            review = {"mode": "live_configured", "model": client.model}
+        except DecisionReviewConfigError:
+            review = {"mode": "unavailable", "model": None}
+    return {"guard_ai": chat, "decision_review": review}

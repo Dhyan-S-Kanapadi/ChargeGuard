@@ -6,6 +6,7 @@ import {
   DisputeSummarySchema,
   DeviceRiskConnectorSchema,
   HealthSchema,
+  LlmStatusSchema,
   MerchantSchema,
   PaymentConnectorSchema,
   OutcomeResponseSchema,
@@ -66,6 +67,7 @@ type RequestOptions<T> = {
   auth?: boolean;
   schema: z.ZodType<T>;
   signal?: AbortSignal;
+  timeoutMs?: number;
 };
 
 export class ApiClient {
@@ -73,6 +75,7 @@ export class ApiClient {
     private readonly baseUrl: string,
     private readonly apiKey: string,
     private readonly timeoutMs = 12_000,
+    private readonly demoToken = "",
   ) {}
 
   private async request<T>(path: string, options: RequestOptions<T>): Promise<T> {
@@ -80,12 +83,16 @@ export class ApiClient {
     const abort = () => controller.abort();
     if (options.signal?.aborted) abort();
     options.signal?.addEventListener("abort", abort, { once: true });
-    const timeout = window.setTimeout(abort, this.timeoutMs);
+    const timeout = window.setTimeout(abort, options.timeoutMs ?? this.timeoutMs);
     try {
       const headers = new Headers({ Accept: "application/json" });
-      if (options.auth !== false) headers.set("X-API-Key", this.apiKey);
+      if (options.auth !== false) {
+        if (this.demoToken) headers.set("X-Demo-Session", this.demoToken);
+        else headers.set("X-API-Key", this.apiKey);
+      }
+      if (path === "/demo/session") headers.set("X-Demo-Request", "1");
       if (options.body !== undefined) headers.set("Content-Type", "application/json");
-      const response = await fetch(joinUrl(this.baseUrl, path), {
+      const response = await fetch(joinUrl(this.baseUrl, this.demoToken && options.auth !== false ? "/demo" + path : path), {
         method: options.method ?? "GET",
         headers,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -269,6 +276,7 @@ export class ApiClient {
       method: "POST",
       body: { question, chargeback_id: chargebackId || null },
       schema: AssistantResponseSchema,
+      timeoutMs: 35_000,
       signal,
     });
   }
@@ -305,6 +313,19 @@ export class ApiClient {
       schema: SimulatorDisputeSchema.array(),
       signal,
     });
+  }
+
+  demoStatus() {
+    return this.request("/demo/status", { auth: false, schema: z.object({ enabled: z.boolean() }) });
+  }
+
+  startDemo() {
+    return this.request("/demo/session", { method: "POST", auth: false,
+      schema: z.object({ session_token: z.string(), expires_in: z.number() }) });
+  }
+
+  llmStatus(signal?: AbortSignal) {
+    return this.request("/assistant/status", { schema: LlmStatusSchema, signal });
   }
 
   simulationScenarios(signal?: AbortSignal) {
