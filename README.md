@@ -2,6 +2,16 @@
 
 Autonomous chargeback dispute management for Indian merchants.
 
+## Live Demo
+
+**[Try ChargeGuard](https://chargeguard-ig9d.onrender.com/dashboard/)** — open the dashboard and click **Try Demo**. No API key is required for reviewer access.
+
+Run a scenario in **Simulator**, inspect its evidence and decision in **Disputes**, then ask **Guard AI** to explain the case. See the [reviewer walkthrough](REVIEWER_DEMO.md) for details.
+
+This is an isolated simulation with synthetic evidence and a local filing stub; it does not submit real chargeback responses. The hosted service may take a moment to wake up.
+
+## Overview
+
 ChargeGuard AI investigates incoming chargebacks, gathers evidence from payment, logistics, support, fraud, and consortium systems, scores whether the dispute is worth fighting, generates a deterministic rebuttal PDF, files the response through a stubbed filing layer, and records final outcomes for model retraining.
 
 The product is designed around a success-fee business model, so the core decision is financial: fight only when the expected value is positive.
