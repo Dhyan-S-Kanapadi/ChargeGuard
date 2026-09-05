@@ -1,0 +1,89 @@
+# Isolated reviewer demo: synthetic evidence, real optional Groq calls.
+services:
+  - type: web
+    name: chargeguard-reviewer-demo
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: ENVIRONMENT
+        value: development
+      - key: API_KEY
+        generateValue: true
+      - key: RAZORPAY_WEBHOOK_SECRET
+        generateValue: true
+      - key: CHARGEGUARD_DEMO_SEED
+        value: "true"
+      - key: CHARGEGUARD_USE_STUBS
+        value: "true"
+      - key: RAZORPAY_USE_STUBS
+        value: "true"
+      - key: STRIPE_USE_STUBS
+        value: "true"
+      - key: SHIPROCKET_USE_STUBS
+        value: "true"
+      - key: DELHIVERY_USE_STUBS
+        value: "true"
+      - key: SEON_USE_STUBS
+        value: "true"
+      - key: GMAIL_USE_STUBS
+        value: "true"
+      - key: FRESHDESK_USE_STUBS
+        value: "true"
+      - key: ETHOCA_USE_STUBS
+        value: "true"
+      - key: VERIFI_USE_STUBS
+        value: "true"
+      - key: CLAUDE_VISION_USE_STUBS
+        value: "true"
+      - key: CASE_SUMMARY_USE_STUBS
+        value: "true"
+      - key: REASON_CLASSIFICATION_ENABLED
+        value: "false"
+      - key: REBUTTAL_NARRATIVE_ENABLED
+        value: "false"
+      - key: ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK
+        value: "false"
+      - key: ALLOW_GLOBAL_SEON_CREDENTIAL_FALLBACK
+        value: "false"
+      - key: RAZORPAY_WEBHOOK_ENABLED
+        value: "true"
+      - key: RAZORPAY_SIMULATOR_ENABLED
+        value: "true"
+      - key: RAZORPAY_SIMULATOR_TARGET_URL
+        value: http://127.0.0.1:10000/webhook/razorpay
+      - key: CHARGEGUARD_STORE_PATH
+        value: /tmp/chargeguard/chargeguard_store.json
+      - key: REBUTTAL_OUTPUT_DIR
+        value: /tmp/chargeguard/rebuttals
+      - key: MODEL_PATH
+        value: /app/ml/artifacts/win_probability_model.pkl
+      - key: PORTFOLIO_ASSISTANT_USE_STUBS
+        value: "false"
+      - key: PORTFOLIO_ASSISTANT_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: PORTFOLIO_ASSISTANT_MODEL
+        value: openai/gpt-oss-120b
+      - key: PORTFOLIO_ASSISTANT_REASONING_EFFORT
+        value: low
+      - key: PORTFOLIO_ASSISTANT_API_KEY
+        sync: false
+      - key: LLM_DECISION_REVIEW_ENABLED
+        value: "true"
+      - key: LLM_DECISION_REVIEW_USE_STUBS
+        value: "false"
+      - key: LLM_DECISION_REVIEW_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: LLM_DECISION_REVIEW_MODEL
+        value: openai/gpt-oss-120b
+      - key: LLM_DECISION_REVIEW_MAX_TOKENS
+        value: "1500"
+      - key: LLM_DECISION_REVIEW_TIMEOUT_SECONDS
+        value: "20"
+      - key: LLM_DECISION_REVIEW_REASONING_EFFORT
+        value: low
+      - key: LLM_DECISION_REVIEW_API_KEY
+        sync: false

@@ -1,12 +1,11 @@
 """Deterministic, synthetic scenario catalog for the local Razorpay simulator."""
 
 from copy import deepcopy
+import os
 from typing import Any
 
 
 _BASE_CARD = {
-    "payment_amount_paise": 250_000,
-    "dispute_amount_paise": 250_000,
     "currency": "INR",
     "method": "card",
     "card_network": "VISA",
@@ -18,15 +17,18 @@ _BASE_CARD = {
 
 def _scenario(
     scenario_id: str,
+    amount_paise: int,
     family: str,
     title: str,
     description: str,
     expected: str,
     *,
     behavior: str = "created",
+    device: dict[str, Any] | None = None,
     **overrides: Any,
 ) -> dict[str, Any]:
-    payload = {**_BASE_CARD, **overrides}
+    payload = {**_BASE_CARD, "payment_amount_paise": amount_paise,
+               "dispute_amount_paise": amount_paise, **overrides}
     return {
         "id": scenario_id,
         "family": family,
@@ -34,6 +36,7 @@ def _scenario(
         "description": description,
         "expected": expected,
         "behavior": behavior,
+        "device": device,
         "payload": payload,
     }
 
@@ -42,6 +45,7 @@ _SCENARIOS = (
     # Decision routing: four representative business outcomes.
     _scenario(
         "friendly-fraud-high-value",
+        2499900,
         "Decision routing",
         "High-value delivered card order",
         "Strong stubbed authentication and delivery evidence on a high-value case.",
@@ -49,15 +53,15 @@ _SCENARIOS = (
     ),
     _scenario(
         "low-value-delivered",
+        49900,
         "Decision routing",
         "Low-value delivered card order",
         "The same strong evidence is uneconomic to represent because response cost exceeds recovery.",
         "ACCEPT with ACCEPTED_NO_CONTEST.",
-        payment_amount_paise=500,
-        dispute_amount_paise=500,
     ),
     _scenario(
         "upi-chargeback",
+        124900,
         "Decision routing",
         "UPI dispute received on card workflow",
         "A real non-card rail must never be inferred to be RuPay or another card network.",
@@ -69,6 +73,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "expired-response-window",
+        875000,
         "Decision routing",
         "Expired provider deadline",
         "The provider respond-by deadline has already passed.",
@@ -79,6 +84,7 @@ _SCENARIOS = (
     # Every currently implemented card-network playbook.
     _scenario(
         "visa-10-4-card-absent-fraud",
+        1249900,
         "Network playbooks",
         "Visa 10.4 card-absent fraud",
         "Exercises Visa fraud routing and the CE3 purchase-history check.",
@@ -88,6 +94,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "visa-13-3-not-as-described",
+        379900,
         "Network playbooks",
         "Visa 13.3 not as described",
         "Customer disputes the quality or description of fulfilled merchandise/services.",
@@ -97,6 +104,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "mastercard-4853-cardholder-dispute",
+        745000,
         "Network playbooks",
         "Mastercard 4853 cardholder dispute",
         "Exercises the implemented Mastercard evidence and 15-page quality cap.",
@@ -107,6 +115,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "rupay-ua02-unauthorized-cnp",
+        219900,
         "Network playbooks",
         "RuPay UA02 unauthorized CNP",
         "Exercises the RuPay namespaced playbook and working-day deadline policy.",
@@ -119,6 +128,7 @@ _SCENARIOS = (
     # All rails accepted by the simulator request schema.
     _scenario(
         "rail-card",
+        159900,
         "Payment rails",
         "Card payment",
         "A supported card payment with explicit network and mapped reason.",
@@ -126,6 +136,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "rail-upi",
+        74900,
         "Payment rails",
         "UPI payment",
         "A UPI payment carries no card entity even if a caller supplies a card hint.",
@@ -136,6 +147,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "rail-netbanking",
+        1825000,
         "Payment rails",
         "Netbanking payment",
         "A bank-transfer rail enters the dispute receiver but not card representment automation.",
@@ -146,6 +158,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "rail-wallet",
+        34900,
         "Payment rails",
         "Wallet payment",
         "A wallet payment is retained as WALLET and is not assigned a card network.",
@@ -158,6 +171,7 @@ _SCENARIOS = (
     # Receiver trust boundary and idempotency.
     _scenario(
         "webhook-valid-signature",
+        629900,
         "Webhook trust",
         "Valid exact-body signature",
         "Signs the exact serialized request body with the configured simulator secret.",
@@ -165,6 +179,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "webhook-invalid-signature",
+        99900,
         "Webhook trust",
         "Invalid signature",
         "Sends a structurally valid event signed by the wrong synthetic secret.",
@@ -173,6 +188,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "webhook-duplicate-event",
+        449900,
         "Webhook trust",
         "Duplicate event delivery",
         "Delivers the same body and event ID twice, as a provider retry may do.",
@@ -181,6 +197,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "webhook-unknown-account",
+        1579900,
         "Webhook trust",
         "Authentic event for unknown account",
         "Uses a valid signature but an unmapped provider account ID.",
@@ -191,6 +208,7 @@ _SCENARIOS = (
     # Provider lifecycle and event ordering.
     _scenario(
         "lifecycle-action-required",
+        525000,
         "Provider lifecycle",
         "Provider action required",
         "Delivers created followed by payment.dispute.action_required.",
@@ -199,6 +217,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "lifecycle-under-review",
+        1199000,
         "Provider lifecycle",
         "Provider under review",
         "Delivers created followed by payment.dispute.under_review.",
@@ -207,6 +226,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "lifecycle-won-before-created",
+        2250000,
         "Provider lifecycle",
         "Out-of-order WON event",
         "A terminal event arrives before ChargeGuard has observed the create event.",
@@ -215,6 +235,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "lifecycle-closed",
+        285000,
         "Provider lifecycle",
         "Provider closes dispute",
         "Delivers created followed by payment.dispute.closed.",
@@ -225,6 +246,7 @@ _SCENARIOS = (
     # Common real-world boundaries where automation must stop or preserve exact facts.
     _scenario(
         "manual-missing-network-reason",
+        189900,
         "Automation boundaries",
         "Unknown network reason",
         "Card network is known but no verified network reason mapping is available.",
@@ -234,6 +256,7 @@ _SCENARIOS = (
     ),
     _scenario(
         "manual-unsupported-amex",
+        3149900,
         "Automation boundaries",
         "Unsupported Amex playbook",
         "The card network is recognized but this repository has no Amex playbook/template.",
@@ -244,15 +267,16 @@ _SCENARIOS = (
     ),
     _scenario(
         "manual-partial-dispute",
+        1250000,
         "Automation boundaries",
         "Partial-amount dispute",
         "Only part of a captured payment is disputed, a common provider event shape.",
         "Preserve the exact disputed amount and apply normal deterministic routing.",
-        payment_amount_paise=500_000,
-        dispute_amount_paise=125_000,
+        payment_amount_paise=5_000_000,
     ),
     _scenario(
         "manual-urgent-deadline",
+        949900,
         "Automation boundaries",
         "Urgent future deadline",
         "Only six hours remain before respond-by.",
@@ -260,6 +284,85 @@ _SCENARIOS = (
         respond_within_hours=6,
     ),
 )
+
+
+_SCENARIOS += (
+    _scenario(
+        "device-consistent", 689900, "Device and IP", "Consistent device and location",
+        "An authenticated purchase from a familiar device near the delivery address.",
+        "Risk score 8, matching location, no VPN; normal deterministic scoring.",
+        device={"ip": "192.0.2.21", "device_id": "sim_familiar_phone",
+                "risk": {"fraud_score": 8, "geo": {"matches_shipping_region": True},
+                         "network": {"vpn": False}, "login": {"pattern": "normal"}}},
+    ),
+    _scenario(
+        "device-new-mobile", 429900, "Device and IP", "New phone on mobile data",
+        "A legitimate authenticated purchase uses a new phone and changed mobile IP.",
+        "Risk score 22 with matching location and no VPN; device change alone cannot decide fraud.",
+        device={"ip": "198.51.100.22", "device_id": "sim_new_phone",
+                "risk": {"fraud_score": 22, "geo": {"matches_shipping_region": True},
+                         "network": {"vpn": False}, "login": {"pattern": "normal"}}},
+    ),
+    _scenario(
+        "device-vpn-mismatch", 2899900, "Device and IP", "VPN and distant IP location",
+        "An unfamiliar device has a high provider risk score, VPN, and a location mismatch.",
+        "Risk score 91, VPN true, location false; score all evidence without declaring fraud automatically.",
+        device={"ip": "203.0.113.23", "device_id": "sim_unfamiliar_device",
+                "risk": {"fraud_score": 91, "geo": {"matches_shipping_region": False},
+                         "network": {"vpn": True}, "login": {"pattern": "unusual"}}},
+    ),
+    _scenario(
+        "device-travelling", 1299900, "Device and IP", "Familiar device while travelling",
+        "A familiar device uses a distant IP while the parcel goes to the home address.",
+        "Risk score 35 and location mismatch without VPN; a mismatch alone does not establish fraud.",
+        device={"ip": "2001:db8::24", "device_id": "sim_familiar_phone",
+                "risk": {"fraud_score": 35, "geo": {"matches_shipping_region": False},
+                         "network": {"vpn": False}, "login": {"pattern": "normal"}}},
+    ),
+    _scenario(
+        "device-timeout", 569900, "Device failures", "Device provider timeout",
+        "The device-risk request times out while other evidence sources remain available.",
+        "Device evidence is unavailable; ESCALATE_DEGRADED and no filing.",
+        device={"ip": "192.0.2.25", "device_id": "sim_timeout", "error": "timeout"},
+    ),
+    _scenario(
+        "device-missing-ip", 799900, "Device failures", "Missing checkout IP",
+        "The payment record contains neither a checkout IP nor a device fingerprint.",
+        "Missing context cannot become safe evidence; ESCALATE_DEGRADED.",
+        device={"ip": "", "device_id": "", "risk": {"fraud_score": 18}},
+    ),
+    _scenario(
+        "device-invalid-response", 1099900, "Device failures", "Malformed risk response",
+        "The provider returns a non-finite risk score instead of usable evidence.",
+        "Reject invalid risk evidence and ESCALATE_DEGRADED.",
+        device={"ip": "198.51.100.27", "device_id": "sim_bad_response",
+                "risk": {"fraud_score": "NaN"}},
+    ),
+    _scenario(
+        "device-auth-failure", 1749900, "Device failures", "Device provider rejects credentials",
+        "A simulated SEON request returns an authentication error.",
+        "Device evidence unavailable; ESCALATE_DEGRADED without changing real connectors.",
+        device={"ip": "203.0.113.28", "device_id": "sim_auth_failure", "error": "authentication"},
+    ),
+)
+
+
+def simulation_record_for_state(state: dict[str, Any]) -> dict[str, Any] | None:
+    """Resolve only locally registered, merchant-owned simulation evidence."""
+    from api.store import store
+
+    if os.getenv("ENVIRONMENT", "development").strip().lower() == "production":
+        return None
+    if os.getenv("RAZORPAY_SIMULATOR_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
+        return None
+    if not str(state.get("chargeback_id", "")).startswith("disp_SIM_"):
+        return None
+    record = store.get_simulator_dispute(state["chargeback_id"])
+    if record is None or record["merchant_id"] != state["merchant_profile"]["merchant_id"]:
+        return None
+    if record["payment_id"] != state.get("payment_id"):
+        return None
+    return record
 
 
 def list_simulation_scenarios() -> list[dict[str, Any]]:

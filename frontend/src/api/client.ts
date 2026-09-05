@@ -6,6 +6,7 @@ import {
   DisputeSummarySchema,
   DeviceRiskConnectorSchema,
   HealthSchema,
+  LlmStatusSchema,
   MerchantSchema,
   PaymentConnectorSchema,
   OutcomeResponseSchema,
@@ -66,6 +67,7 @@ type RequestOptions<T> = {
   auth?: boolean;
   schema: z.ZodType<T>;
   signal?: AbortSignal;
+  timeoutMs?: number;
 };
 
 export class ApiClient {
@@ -80,7 +82,7 @@ export class ApiClient {
     const abort = () => controller.abort();
     if (options.signal?.aborted) abort();
     options.signal?.addEventListener("abort", abort, { once: true });
-    const timeout = window.setTimeout(abort, this.timeoutMs);
+    const timeout = window.setTimeout(abort, options.timeoutMs ?? this.timeoutMs);
     try {
       const headers = new Headers({ Accept: "application/json" });
       if (options.auth !== false) headers.set("X-API-Key", this.apiKey);
@@ -269,6 +271,7 @@ export class ApiClient {
       method: "POST",
       body: { question, chargeback_id: chargebackId || null },
       schema: AssistantResponseSchema,
+      timeoutMs: 35_000,
       signal,
     });
   }
@@ -305,6 +308,10 @@ export class ApiClient {
       schema: SimulatorDisputeSchema.array(),
       signal,
     });
+  }
+
+  llmStatus(signal?: AbortSignal) {
+    return this.request("/assistant/status", { schema: LlmStatusSchema, signal });
   }
 
   simulationScenarios(signal?: AbortSignal) {

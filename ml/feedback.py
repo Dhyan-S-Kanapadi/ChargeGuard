@@ -49,6 +49,8 @@ def _int_env(name: str, default: int) -> int:
 
 
 def _feedback_record(state: ChargebackState) -> dict[str, Any]:
+    if state["chargeback_id"].startswith("disp_SIM_"):
+        raise ValueError("synthetic simulator outcomes cannot train the real model")
     outcome = state.get("final_outcome")
     if outcome not in {"WIN", "LOSS"}:
         raise ValueError("feedback requires a terminal WIN or LOSS outcome")

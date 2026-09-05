@@ -2,6 +2,7 @@
 
 import json
 import os
+import math
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit, urlunsplit
@@ -92,6 +93,8 @@ def _bounded_number(value: Any, *, minimum: float, maximum: float) -> float | No
         number = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(number):
+        return None
     return min(max(number, minimum), maximum)
 
 
@@ -156,7 +159,7 @@ def decision_review_facts(state: Mapping[str, Any]) -> dict[str, Any]:
         "shipping": {
             "available": bool(shipping),
             "status_category": str(shipping.get("status_category") or "UNKNOWN").upper()[:30],
-            "delivered": str(shipping.get("status_category") or "").upper() == "DELIVERED",
+            "delivered": str(shipping.get("status_category") or "").upper() in {"DELIVERED", "CONFIRMED_DELIVERED"},
             "signature_obtained": bool(shipping.get("signature_obtained")),
         },
         "communications": {
@@ -217,6 +220,7 @@ class DecisionReviewClient:
         api_key: str | None = None,
         timeout: float = 10.0,
         max_tokens: int = 500,
+        reasoning_effort: str | None = None,
         client: httpx.Client | None = None,
     ) -> None:
         self.base_url = _normalize_base_url(base_url)
@@ -234,6 +238,9 @@ class DecisionReviewClient:
         self.api_key = api_key.strip() if api_key and api_key.strip() else None
         self.timeout = timeout
         self.max_tokens = max_tokens
+        if reasoning_effort not in {None, "low", "medium", "high"}:
+            raise DecisionReviewConfigError("Invalid decision review reasoning effort.")
+        self.reasoning_effort = reasoning_effort
         self._client = client
 
     @classmethod
@@ -250,11 +257,16 @@ class DecisionReviewClient:
             model=values.get("LLM_DECISION_REVIEW_MODEL", ""),
             timeout=timeout,
             max_tokens=max_tokens,
+            reasoning_effort=values.get("LLM_DECISION_REVIEW_REASONING_EFFORT") or None,
         )
 
     def review(self, facts: dict[str, Any]) -> DecisionReviewResult:
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT + "\nRequired JSON schema:\n"
+                + json.dumps(DecisionReviewResult.model_json_schema(), separators=(",", ":")),
+            },
             {
                 "role": "user",
                 "content": (
@@ -272,6 +284,8 @@ class DecisionReviewClient:
                 "response_format": {"type": "json_object"},
                 "messages": messages,
             }
+            if self.reasoning_effort:
+                payload["reasoning_effort"] = self.reasoning_effort
             response = self._post(payload)
             try:
                 return self._parse_response(response)

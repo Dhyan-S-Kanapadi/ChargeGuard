@@ -1,6 +1,8 @@
+import json
 from datetime import datetime, timezone
 from typing import cast
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -14,6 +16,7 @@ from api.assistant import (
 from api.store import store
 from core.state import ChargebackState
 from main import app
+from integrations.portfolio_assistant import PortfolioAssistantClient
 
 
 @pytest.fixture(autouse=True)
@@ -81,6 +84,12 @@ def test_assistant_endpoint_receives_bounded_grounded_context(monkeypatch) -> No
         "final_outcome": "WIN",
         "contradiction_summary": "Delivery signature is on file.",
         "decision_reasoning": "Expected recovery exceeds response cost.",
+        "filing_deadline": None,
+        "dispute_amount": None,
+        "currency": None,
+        "synthetic": False,
+        "degraded_reasons": [],
+        "device_risk": {"fraud_score": None, "vpn_detected": None, "geolocation_match": None},
     }
 
 
@@ -117,3 +126,86 @@ def test_assistant_rate_limit_rejects_eleventh_request(monkeypatch) -> None:
 
     assert raised.value.status_code == 429
     assert raised.value.headers["Retry-After"]
+
+
+def test_openai_compatible_portfolio_assistant() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["authorization"] = request.headers.get("Authorization")
+        captured["payload"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "The portfolio is healthy."}}]},
+        )
+
+    client = PortfolioAssistantClient.from_env(
+        {
+            "PORTFOLIO_ASSISTANT_API_KEY": "gsk_test",
+            "PORTFOLIO_ASSISTANT_MODEL": "openai/gpt-oss-120b",
+            "PORTFOLIO_ASSISTANT_BASE_URL": "https://api.groq.com/openai/v1/",
+            "PORTFOLIO_ASSISTANT_REASONING_EFFORT": "low",
+        }
+    )
+    client._client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    assert client.answer("How is the portfolio?", {"disputes": []}) == "The portfolio is healthy."
+    assert captured["url"] == "https://api.groq.com/openai/v1/chat/completions"
+    assert captured["authorization"] == "Bearer gsk_test"
+    assert captured["payload"]["messages"][0]["role"] == "system"
+    assert captured["payload"]["reasoning_effort"] == "low"
+    assert captured["payload"]["max_tokens"] == 1500
+
+
+def test_context_is_bounded_and_scoped_with_safe_device_signals() -> None:
+    for index in range(25):
+        state = _state(f"disp_SIM_{index}")
+        state["device"] = {"fraud_score": 85, "vpn_detected": True,
+                           "geolocation_match": False, "ip_address": "192.0.2.8",
+                           "device_fingerprint": "secret-device"}
+        state["filing_deadline"] = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        store.create_dispute(state)
+    assert len(build_assistant_context()["disputes"]) == 20
+    scoped = build_assistant_context("disp_SIM_5")["disputes"]
+    assert len(scoped) == 1
+    assert scoped[0]["synthetic"] is True
+    assert scoped[0]["filing_deadline"].startswith("2026-09-20")
+    assert scoped[0]["device_risk"]["vpn_detected"] is True
+    assert "192.0.2.8" not in json.dumps(scoped)
+    assert "secret-device" not in json.dumps(scoped)
+
+
+def test_status_requires_auth_and_never_returns_provider_keys(monkeypatch) -> None:
+    monkeypatch.setenv("API_KEY", "test-api-key")
+    monkeypatch.setenv("PORTFOLIO_ASSISTANT_USE_STUBS", "false")
+    monkeypatch.setenv("PORTFOLIO_ASSISTANT_BASE_URL", "https://api.groq.com/openai/v1")
+    monkeypatch.setenv("PORTFOLIO_ASSISTANT_MODEL", "test-model")
+    monkeypatch.setenv("PORTFOLIO_ASSISTANT_API_KEY", "private-provider-key")
+    monkeypatch.setenv("LLM_DECISION_REVIEW_ENABLED", "false")
+    client = TestClient(app)
+    assert client.get("/assistant/status").status_code == 401
+    result = client.get("/assistant/status", headers={"X-API-Key": "test-api-key"})
+    assert result.json()["guard_ai"] == {"mode": "live_configured", "model": "test-model"}
+    assert result.json()["decision_review"]["mode"] == "disabled"
+    assert "private-provider-key" not in result.text
+    monkeypatch.delenv("PORTFOLIO_ASSISTANT_API_KEY")
+    assert client.get("/assistant/status", headers={"X-API-Key": "test-api-key"}).json()["guard_ai"]["mode"] == "unavailable"
+
+
+def test_generation_errors_do_not_log_provider_body(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("API_KEY", "test-api-key")
+    def fail(*args):
+        raise RuntimeError("private-key-in-provider-body")
+    monkeypatch.setattr(assistant, "generate_portfolio_answer", fail)
+    response = TestClient(app).post("/assistant/query", headers={"X-API-Key": "test-api-key"},
+                                    json={"question": "Summarize the portfolio"})
+    assert response.status_code == 503
+    assert "private-key-in-provider-body" not in caplog.text + response.text
+
+
+@pytest.mark.parametrize("content", [None, {}, 17, [], ""])
+def test_nontext_provider_response_fails_safely(content) -> None:
+    from integrations.portfolio_assistant import PortfolioAssistantRequestError
+    with pytest.raises(PortfolioAssistantRequestError):
+        PortfolioAssistantClient._extract_text({"choices": [{"message": {"content": content}}]})

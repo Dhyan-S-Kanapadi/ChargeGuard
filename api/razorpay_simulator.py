@@ -203,11 +203,13 @@ def _seed_simulator_order(record: dict[str, Any]) -> None:
     """Give the real graph an exact merchant-owned order to correlate."""
     merchant_id = record["merchant_id"]
     suffix = record["dispute_id"].removeprefix("disp_SIM_")
+    scenario = get_simulation_scenario(record.get("scenario_id", ""))
+    profile = (scenario.get("device") or {}) if scenario else {}
     order: OrderRecord = {
         "order_id": record["order_id"],
         "merchant_id": merchant_id,
         "customer_email": record.get("customer_email") or f"simulator+{suffix}@example.test",
-        "customer_ip": "192.0.2.10",
+        "customer_ip": profile.get("ip", "192.0.2.10"),
         "user_agent": "ChargeGuard-Simulator/1.0",
         "shipping_address": "Synthetic simulator address, Bengaluru",
         "order_date": record["created_at"],

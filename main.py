@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.assistant import router as assistant_router
+from api.demo_bootstrap import seed_demo_merchant
 from api.disputes import router as disputes_router
 from api.device_risk_connectors import router as device_risk_connectors_router
 from api.merchants import router as merchants_router
@@ -66,6 +67,7 @@ def _log_deployment_warnings() -> None:
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     _log_deployment_warnings()
+    seed_demo_merchant()
     schedule_startup_razorpay_recovery()
     yield
 

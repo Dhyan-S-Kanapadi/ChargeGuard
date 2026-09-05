@@ -19,6 +19,16 @@ Open **Dashboard → Simulator**, choose a mapped Razorpay merchant, select an e
 | Provider lifecycle | Created → action required; created → under review; WON before CREATED; created → closed |
 | Automation boundaries | Missing mapped network reason; unsupported Amex playbook; partial-amount preservation; urgent future deadline |
 
+Two additional runnable families cover device evidence (32 cases total):
+
+| Family | Four runnable examples |
+|---|---|
+| Device and IP | Consistent device/location (risk 8); new mobile device (22); VPN/location mismatch (91); travelling customer with IPv6 (35) |
+| Device failures | Timeout; missing IP/fingerprint; malformed score; authentication failure |
+
+Every case has a distinct disputed amount, from INR 349 to INR 31,499. The partial-dispute example disputes INR 12,500 of an INR 50,000 payment; both amounts are shown in the dashboard.
+Device fixtures are selected from locally stored, merchant/payment-matched simulator records only when the simulator and provider stubs are enabled outside production. They exercise the same normalization and scoring functions as live evidence. No real connector is changed by a simulated failure. All `disp_SIM_*` outcomes are excluded from training.
+
 The catalog API is `GET /dev/razorpay-simulator/scenarios`. Run one example with:
 
 ```http
@@ -30,6 +40,14 @@ Content-Type: application/json
 ```
 
 Each run generates new payment/order/dispute IDs. Reusing manual payment or order IDs is rejected with 409 so two simulated cases cannot silently share commerce evidence.
+
+To load and verify all 32 examples against the running local demo, set `API_KEY` in the shell and run:
+
+```powershell
+py scripts/run_simulation_catalog.py --base-url http://127.0.0.1:8200 --merchant merchant_demo
+```
+
+The runner waits for the final lifecycle event and completed workflow, checks stored amounts, device signals, routing, and filing invariants, prints PASS/FAIL per example, and exits nonzero on failure. Existing cases are retained.
 
 ## Complete implemented-control test matrix
 

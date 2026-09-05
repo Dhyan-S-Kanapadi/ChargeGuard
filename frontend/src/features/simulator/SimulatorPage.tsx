@@ -146,7 +146,8 @@ export function SimulatorPage() {
             <dl>
               <div><dt>Rail</dt><dd>{selectedScenario.payload.method.toUpperCase()}</dd></div>
               <div><dt>Network / reason</dt><dd>{selectedScenario.payload.card_network ?? "none"} / {selectedScenario.payload.network_reason_code ?? "none"}</dd></div>
-              <div><dt>Amount</dt><dd>{formatMoney(selectedScenario.payload.dispute_amount_paise / 100, selectedScenario.payload.currency)}</dd></div>
+              <div><dt>Payment amount</dt><dd>{formatMoney(selectedScenario.payload.payment_amount_paise / 100, selectedScenario.payload.currency)}</dd></div>
+              <div><dt>Disputed amount</dt><dd>{formatMoney(selectedScenario.payload.dispute_amount_paise / 100, selectedScenario.payload.currency)}</dd></div>
               <div><dt>Deadline</dt><dd>{selectedScenario.payload.respond_within_hours} hours</dd></div>
             </dl>
             <strong>Expected</strong>
