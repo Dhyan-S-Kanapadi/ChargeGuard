@@ -17,6 +17,14 @@ services:
         generateValue: true
       - key: CHARGEGUARD_DEMO_SEED
         value: "true"
+      - key: PUBLIC_DEMO_ENABLED
+        value: "true"
+      - key: PUBLIC_DEMO_DB_PATH
+        value: /tmp/chargeguard/public_demo.sqlite3
+      - key: PUBLIC_DEMO_DAILY_RUN_LIMIT
+        value: "40"
+      - key: PUBLIC_DEMO_DAILY_LLM_BUDGET
+        value: "100"
       - key: CHARGEGUARD_USE_STUBS
         value: "true"
       - key: RAZORPAY_USE_STUBS

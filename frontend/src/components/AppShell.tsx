@@ -18,7 +18,7 @@ const navItems: Array<{ route: Route; label: string; icon: typeof Gauge; protect
 ];
 
 export function AppShell({ route, children }: { route: Route; children: ReactNode }) {
-  const { client, health, selectedMerchantId, setSelectedMerchantId, disconnect } = useConnection();
+  const { client, health, selectedMerchantId, setSelectedMerchantId, disconnect, isDemo } = useConnection();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [dark, setDark] = useState(() => localStorage.getItem("chargeguard.theme") === "dark");
@@ -51,7 +51,7 @@ export function AppShell({ route, children }: { route: Route; children: ReactNod
       <aside className={`sidebar ${drawerOpen ? "sidebar--open" : ""}`} aria-label="Primary navigation">
         <div className="brand"><span className="brand__mark"><ShieldCheck /></span><span><strong>ChargeGuard</strong><small>Dispute intelligence</small></span><button className="icon-button sidebar__close" onClick={() => setDrawerOpen(false)} aria-label="Close navigation"><X /></button></div>
         <nav>
-          {items.map(({ route: itemRoute, label, icon: Icon, protected: isProtected }) => (
+          {items.filter(item => !isDemo || ["overview", "disputes", "ai", "simulator"].includes(item.route)).map(({ route: itemRoute, label, icon: Icon, protected: isProtected }) => (
             <a key={itemRoute} href={`#/${itemRoute}`} className={route === itemRoute ? "active" : ""} onClick={() => setDrawerOpen(false)} aria-current={route === itemRoute ? "page" : undefined}>
               <Icon aria-hidden="true" /><span>{label}</span>{isProtected ? <small>Protected</small> : null}{itemRoute === "simulator" ? <small>Dev</small> : null}
             </a>

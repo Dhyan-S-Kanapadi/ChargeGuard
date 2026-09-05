@@ -1,11 +1,19 @@
 import { Eye, EyeOff, ShieldCheck } from "lucide-react";
-import { useState, type FormEvent } from "react";
-import { ApiError } from "../api/client";
+import { useEffect, useState, type FormEvent } from "react";
+import { ApiClient, ApiError } from "../api/client";
 import { useConnection } from "../app/ConnectionContext";
 import { Button } from "./ui";
 
 export function ConnectionScreen() {
-  const { baseUrl: initialUrl, connect } = useConnection();
+  const { baseUrl: initialUrl, connect, startDemo } = useConnection();
+  const [demoAvailable, setDemoAvailable] = useState(false);
+  useEffect(() => {
+    let active = true;
+    new ApiClient(window.location.origin, "").demoStatus().then(result => {
+      if (active) setDemoAvailable(result.enabled);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, []);
   const [baseUrl, setBaseUrl] = useState(initialUrl);
   const [apiKey, setApiKey] = useState("");
   const [show, setShow] = useState(false);
@@ -37,6 +45,12 @@ export function ConnectionScreen() {
     </section>
     <section className="connection-card" aria-labelledby="connect-title">
       <p className="eyebrow">Service access</p><h2 id="connect-title">Connect to ChargeGuard</h2><p>Health is checked first, then an authenticated endpoint verifies the key.</p>
+      {demoAvailable ? <div><Button type="button" loading={pending} onClick={async () => {
+        setPending(true); setError("");
+        try { await startDemo(); } catch (caught) {
+          setError(caught instanceof Error ? caught.message : "Demo unavailable.");
+        } finally { setPending(false); }
+      }}>Try Demo</Button><p>No key needed. Your synthetic cases only. One-hour session, up to 8 runs and 8 chats; shared daily limits apply. Refreshing ends this session.</p></div> : null}
       <form onSubmit={submit}>
         <label>API base URL<input type="url" required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} autoComplete="url" /></label>
         <div className="field"><label htmlFor="api-key">API key</label><span className="secret-input"><input id="api-key" type={show ? "text" : "password"} required value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" /><button type="button" className="icon-button" onClick={() => setShow(!show)} aria-label={show ? "Hide API key" : "Show API key"}>{show ? <EyeOff /> : <Eye />}</button></span></div>

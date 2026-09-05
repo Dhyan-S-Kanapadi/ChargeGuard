@@ -35,16 +35,16 @@ reviews store a safe unavailable code and automation continues deterministically
 ## What to give the reviewer
 
 1. The service's `https://YOUR-SERVICE.onrender.com/dashboard/` URL.
-2. The generated dashboard `API_KEY`, sent privately.
-3. Instructions below. The reviewer does **not** need your Groq keys.
+2. Tell them to click **Try Demo**. No key exchange is needed.
+3. Instructions below. Keep both your operator key and Groq keys private.
 
-The API key grants operator access to this shared demo. Only invite trusted
-reviewers; never reuse this key or demo service for real merchants or customer data.
+Public sessions last one hour and are kept in browser memory only. Each session
+can view only its own generated synthetic cases. Refreshing/disconnecting loses
+access to that session. Operator login remains separate.
 
 ## Five-minute walkthrough
 
-1. Open the dashboard. Set the API origin to the same Render service URL and paste
-   the dashboard API key. A sleeping free service may take time to start.
+1. Open the dashboard and click **Try Demo**. A sleeping free service may take time to start.
 2. Open **Simulator** and select **Reviewer Demo Merchant**. Startup seeds this
    synthetic merchant automatically; do not connect real payment credentials.
 3. Run one catalog case at a time. The 32 cases cover eight families with four
@@ -64,6 +64,31 @@ Avoid rapidly running all 32 cases with live reviews enabled on a free Groq acco
 For a bulk deterministic test, temporarily set
 `LLM_DECISION_REVIEW_USE_STUBS=true`, then restore `false` and run one live case.
 See [SIMULATION_TEST_MATRIX.md](SIMULATION_TEST_MATRIX.md) for expected outcomes.
+
+## Public access controls
+
+The Blueprint enables `PUBLIC_DEMO_ENABLED=true`. For existing Render services,
+also set `CHARGEGUARD_DEMO_SEED=true`, `CASE_SUMMARY_USE_STUBS=true` and all
+evidence providers to stubs as listed in the Blueprint. Keep narrative and reason
+classification disabled. Production mode or live evidence overrides fail closed.
+Restart/redeploy after changing environment variables; no keys go into the UI.
+
+Limits: 8 runs and 8 chats per session, 16 each per network peer/day, 5 new sessions
+per peer/day, and 100 total sessions/day. Defaults allow at most 40 public runs/day,
+60 chats/day, and 100 reserved LLM calls/day across both features. Each run reserves
+two calls for the review retry; failed or stubbed work still consumes reservations.
+Limits reset at UTC midnight. Configure `PUBLIC_DEMO_DAILY_RUN_LIMIT` and
+`PUBLIC_DEMO_DAILY_LLM_BUDGET` (0 disables that work).
+
+Quotas and hashed session tokens are saved in SQLite at `PUBLIC_DEMO_DB_PATH`.
+They survive process restarts only while that file remains. Render's ephemeral
+filesystem can reset them on redeploy/restart; use durable storage for durable caps.
+Also set provider-side spending limits. Proxy peers may share a limit; arbitrary
+forwarded headers are not trusted. This is bounded demo access, not bot-proof identity.
+
+Public routes do not expose manual case creation, lifecycle mutations, connector
+management, raw evidence, summaries that trigger extra LLM calls, classifications,
+outcome mutation or admin operations. Those still require operator authentication.
 
 ## Verified local checks
 

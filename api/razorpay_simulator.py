@@ -7,7 +7,7 @@ import json
 import os
 import secrets
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -326,6 +326,15 @@ def run_scenario(
     scenario_id: str,
     payload: RazorpaySimulatorScenarioRun,
 ) -> dict[str, Any]:
+    return execute_scenario(scenario_id, payload)
+
+
+def execute_scenario(
+    scenario_id: str,
+    payload: RazorpaySimulatorScenarioRun,
+    *,
+    on_created: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     _require_simulator()
     scenario = get_simulation_scenario(scenario_id)
     if scenario is None:
@@ -353,6 +362,8 @@ def run_scenario(
         account_id=account_id,
     )
 
+    if on_created is not None:
+        on_created(record["dispute_id"])
     if behavior == "invalid_signature":
         event_id, body = _prepared_event(record, "payment.dispute.created", "open")
         result = {

@@ -5,6 +5,16 @@ import { ApiClient, joinUrl } from "./client";
 import { server } from "../test/server";
 
 describe("ApiClient", () => {
+  it("routes session traffic only to the restricted demo surface", async () => {
+    server.use(http.get("http://localhost/demo/stats", ({ request }) => {
+      expect(request.headers.get("X-Demo-Session")).toBe("restricted-token");
+      expect(request.headers.has("X-API-Key")).toBe(false);
+      return HttpResponse.json({ total_disputes_processed: 0,
+        decisions: { FIGHT: 0, ACCEPT: 0, ESCALATE_DEGRADED: 0 }, win_rate: null,
+        average_expected_value: null, evidence_collection_degraded_count: 0 });
+    }));
+    await new ApiClient("http://localhost", "", 12000, "restricted-token").stats();
+  });
   beforeAll(() => {
     Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { origin: "http://localhost" }, setTimeout, clearTimeout } });
   });

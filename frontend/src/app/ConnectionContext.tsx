@@ -11,6 +11,8 @@ type Connection = {
 };
 
 type ConnectionContextValue = Connection & {
+  isDemo: boolean;
+  startDemo: () => Promise<void>;
   client: ApiClient;
   connected: boolean;
   health: Health | null;
@@ -41,11 +43,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [connection, setConnection] = useState(initialConnection);
   const [health, setHealth] = useState<Health | null>(null);
   const [connected, setConnected] = useState(false);
+  const [demoToken, setDemoToken] = useState("");
   const [selectedMerchantId, setSelectedMerchantId] = useState("");
   const restoreAttempted = useRef(false);
   const client = useMemo(
-    () => new ApiClient(connection.baseUrl, connection.apiKey),
-    [connection.apiKey, connection.baseUrl],
+    () => new ApiClient(connection.baseUrl, connection.apiKey, 12_000, demoToken),
+    [connection.apiKey, connection.baseUrl, demoToken],
   );
 
   useEffect(() => {
@@ -73,6 +76,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       throw error;
     }
     setConnection(next);
+    setDemoToken("");
     setHealth(healthResult);
     setConnected(true);
     if (next.rememberForTab) sessionStorage.setItem(SESSION_KEY, JSON.stringify(next));
@@ -80,7 +84,22 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     return healthResult;
   };
 
+  const startDemo = async () => {
+    const baseUrl = window.location.origin;
+    const candidate = new ApiClient(baseUrl, "");
+    const healthResult = await candidate.health();
+    const session = await candidate.startDemo();
+    sessionStorage.removeItem(SESSION_KEY);
+    setConnection({ baseUrl, apiKey: "", rememberForTab: false });
+    setDemoToken(session.session_token);
+    setHealth(healthResult);
+    setSelectedMerchantId("merchant_reviewer_demo");
+    setConnected(true);
+    window.location.hash = "#/simulator";
+  };
+
   const disconnect = () => {
+    setDemoToken("");
     sessionStorage.removeItem(SESSION_KEY);
     setConnection({ baseUrl: window.location.origin, apiKey: "", rememberForTab: false });
     setHealth(null);
@@ -91,6 +110,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   return (
     <ConnectionContext.Provider value={{
       ...connection,
+      isDemo: Boolean(demoToken),
+      startDemo,
       client,
       connected,
       health,
