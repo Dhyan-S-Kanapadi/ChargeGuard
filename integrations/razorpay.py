@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from core.runtime import require_live_provider
 
 
 RAZORPAY_BASE_URL = "https://api.razorpay.com/v1"
@@ -34,6 +35,7 @@ class RazorpayClient:
         timeout: float = 10.0,
         client: httpx.Client | None = None,
     ) -> None:
+        require_live_provider("razorpay")
         self.key_id = key_id
         self.key_secret = key_secret
         self.base_url = base_url.rstrip("/")

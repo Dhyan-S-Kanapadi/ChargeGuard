@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import httpx
+from core.runtime import require_live_provider
 
 
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
@@ -31,6 +32,7 @@ class ClaudeVisionClient:
         timeout: float = 20.0,
         client: httpx.Client | None = None,
     ) -> None:
+        require_live_provider("claude_vision")
         self.api_key = api_key
         self.model = model
         self.timeout = timeout

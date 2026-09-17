@@ -1,4 +1,5 @@
 import logging
+from core.runtime import evidence_uses_stubs
 import math
 import os
 from ipaddress import ip_address
@@ -41,10 +42,7 @@ def _transaction_context(state: ChargebackState) -> dict[str, Any]:
 
 
 def _device_use_stubs() -> bool:
-    value = os.getenv("SEON_USE_STUBS")
-    if value is None:
-        return _env_flag("CHARGEGUARD_USE_STUBS")
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return evidence_uses_stubs("seon")
 
 
 def _stub_device_risk_response(state: ChargebackState) -> dict[str, Any]:

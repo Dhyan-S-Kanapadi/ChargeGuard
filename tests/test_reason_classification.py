@@ -71,6 +71,7 @@ def _classification_state(**updates):
         }
     )
     state.update(updates)
+    assert store.create_merchant(state["merchant_profile"])
     assert store.create_dispute(state)
     store.update_dispute(state["chargeback_id"], status="completed", state=state)
     return state

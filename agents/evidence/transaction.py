@@ -1,4 +1,5 @@
 import logging
+from core.runtime import evidence_uses_stubs
 import os
 import json
 from datetime import datetime, timezone
@@ -32,12 +33,7 @@ def _payment_provider(state: ChargebackState) -> str:
 
 
 def _transaction_use_stubs(state: ChargebackState) -> bool:
-    provider = _payment_provider(state)
-    override_name = "STRIPE_USE_STUBS" if provider == "stripe" else "RAZORPAY_USE_STUBS"
-    value = os.getenv(override_name)
-    if value is None:
-        return _env_flag("CHARGEGUARD_USE_STUBS")
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return evidence_uses_stubs(_payment_provider(state))
 
 
 def _bool_from_any(value: Any) -> bool:

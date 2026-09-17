@@ -5,6 +5,7 @@ from pathlib import Path
 from agents.contradiction import contradictions_from_state
 from core.config import response_cost_for_currency
 from core.state import ChargebackState
+from core.runtime import assert_workflow_environment
 from ml.model import WinProbabilityModel
 from ml.subscores import subscores_from_state
 
@@ -71,6 +72,7 @@ def _predict_win_probability(state: ChargebackState) -> tuple[float, str]:
 
 def scoring_agent(state: ChargebackState) -> ChargebackState:
     """Predict win probability and apply the deterministic EV decision rule."""
+    assert_workflow_environment(state)
     ce3_qualification = state.get("ce3_qualification") or {}
     ce3_override = bool(
         state.get("card_network") == "VISA"

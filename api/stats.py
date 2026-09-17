@@ -1,8 +1,9 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from api.auth import require_api_key
+from api.identity import visible_disputes
 from api.store import store
 from core.state import is_filed_dispute
 
@@ -49,5 +50,5 @@ def build_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 @router.get("")
-def get_stats() -> dict[str, Any]:
-    return build_stats(store.list_disputes())
+def get_stats(request: Request) -> dict[str, Any]:
+    return build_stats(visible_disputes(request, store.list_disputes()))

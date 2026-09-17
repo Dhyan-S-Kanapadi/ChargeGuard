@@ -7,6 +7,17 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: ci-isolated-only
+          POSTGRES_DB: chargeguard_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d chargeguard_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -31,6 +42,19 @@ jobs:
         run: poetry install
       - name: Run tests
         run: poetry run pytest -q
+      - name: Real PostgreSQL persistence and concurrency tests
+        env:
+          CHARGEGUARD_TEST_DATABASE_URL: postgresql://postgres:ci-isolated-only@127.0.0.1:5432/chargeguard_test
+        run: poetry run pytest -q tests/test_postgres_store.py tests/test_identity.py
+      - name: Existing workflow regressions on PostgreSQL
+        env:
+          ENVIRONMENT: test
+          CHARGEGUARD_STORE_BACKEND: postgres
+          DATABASE_URL: postgresql://postgres:ci-isolated-only@127.0.0.1:5432/chargeguard_test
+        run: >-
+          poetry run pytest -q tests/test_api.py tests/test_payment_connectors.py
+          tests/test_device_risk_connectors.py tests/test_razorpay_webhooks.py
+          tests/test_razorpay_event_recovery.py tests/test_reason_classification.py
       - name: Validate Docker Compose configuration
         run: docker compose config
       - name: Build Docker image
@@ -41,7 +65,7 @@ jobs:
             --name chargeguard-ci \
             -p 8000:8000 \
             -e PORT=8000 \
-            -e ENVIRONMENT=production \
+            -e ENVIRONMENT=staging \
             -e API_KEY=ci-test-api-key \
             -e RAZORPAY_WEBHOOK_SECRET=ci-test-webhook-secret \
             -e RAZORPAY_WEBHOOK_ENABLED=true \

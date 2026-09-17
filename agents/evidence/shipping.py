@@ -1,4 +1,5 @@
 import logging
+from core.runtime import evidence_uses_stubs
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -30,11 +31,7 @@ def _bool_from_any(value: Any) -> bool:
 
 
 def _shipping_use_stubs(state: ChargebackState, provider: str) -> bool:
-    override_name = "DELHIVERY_USE_STUBS" if provider == "delhivery" else "SHIPROCKET_USE_STUBS"
-    value = os.getenv(override_name)
-    if value is None:
-        return _env_flag("CHARGEGUARD_USE_STUBS")
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return evidence_uses_stubs(provider)
 
 
 def _empty_shipping_evidence(

@@ -190,6 +190,8 @@ class OrderTimelineEvidence(TypedDict):
 
 
 class ChargebackState(TypedDict):
+    data_environment: NotRequired[str]
+    _store_version: NotRequired[int]
     # Input
     chargeback_id: str
     order_id: NotRequired[str]

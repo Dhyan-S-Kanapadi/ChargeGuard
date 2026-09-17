@@ -1,4 +1,5 @@
 import logging
+from core.runtime import evidence_uses_stubs
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -19,10 +20,7 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 
 def _claude_vision_use_stubs() -> bool:
-    value = os.getenv("CLAUDE_VISION_USE_STUBS")
-    if value is None:
-        return _env_flag("CHARGEGUARD_USE_STUBS")
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return evidence_uses_stubs("claude_vision")
 
 
 def _shipping_context(state: ChargebackState) -> dict:

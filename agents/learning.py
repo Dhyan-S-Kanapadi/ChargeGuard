@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timezone
 
 from core.state import ChargebackState, is_filed_dispute
+from core.runtime import assert_workflow_environment
 from ml.feedback import record_outcome
 
 
@@ -19,6 +20,7 @@ def _default_outcome_reason(state: ChargebackState) -> str:
 
 def learning_agent(state: ChargebackState) -> ChargebackState:
     """Record feedback only after a terminal WIN or LOSS outcome."""
+    assert_workflow_environment(state)
     logger.info("Running learning agent for %s", state["chargeback_id"])
     if state["chargeback_id"].startswith("disp_SIM_"):
         return state

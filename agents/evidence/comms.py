@@ -1,4 +1,5 @@
 import logging
+from core.runtime import evidence_uses_stubs
 import os
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -20,11 +21,7 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 
 def _comms_use_stubs(provider: str) -> bool:
-    override_name = "GMAIL_USE_STUBS" if provider == "gmail" else "FRESHDESK_USE_STUBS"
-    value = os.getenv(override_name)
-    if value is None:
-        return _env_flag("CHARGEGUARD_USE_STUBS")
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return evidence_uses_stubs(provider)
 
 
 def _customer_email(state: ChargebackState) -> str:

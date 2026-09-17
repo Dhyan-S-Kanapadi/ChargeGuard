@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from analytics.merchant_stats import merchant_dispute_ratio
 from api.auth import require_api_key
@@ -163,8 +163,10 @@ def sync_shopify_history_endpoint(merchant_id: str) -> ShopifySyncResponse:
 
 
 @router.get("", response_model=list[MerchantResponse])
-def list_merchants() -> list[MerchantResponse]:
-    return [_response(profile) for profile in store.list_merchants()]
+def list_merchants(request: Request) -> list[MerchantResponse]:
+    principal = getattr(request.state, "principal", None)
+    return [_response(profile) for profile in store.list_merchants()
+            if principal is None or profile["merchant_id"] in principal.memberships]
 
 
 @router.get("/{merchant_id}", response_model=MerchantResponse)
