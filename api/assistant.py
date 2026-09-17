@@ -7,9 +7,10 @@ from threading import Lock
 import time
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from api.auth import require_api_key
+from api.identity import visible_disputes
 from api.disputes import _redact_state
 from api.schemas import AssistantQuery, AssistantResponse
 from api.stats import build_stats
@@ -88,8 +89,9 @@ def _summary_from_record(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_assistant_context(chargeback_id: str | None = None) -> dict[str, Any]:
-    records = store.list_disputes()
+def build_assistant_context(chargeback_id: str | None = None, *, records=None) -> dict[str, Any]:
+    if records is None:
+        records = store.list_disputes()
     selected: list[dict[str, Any]] = []
     requested_record = None
     if chargeback_id:
@@ -116,10 +118,11 @@ def build_assistant_context(chargeback_id: str | None = None) -> dict[str, Any]:
 
 @router.post("/query", response_model=AssistantResponse)
 def query_assistant(
+    request: Request,
     payload: AssistantQuery,
     _: None = Depends(enforce_assistant_rate_limit),
 ) -> AssistantResponse:
-    context = build_assistant_context(payload.chargeback_id)
+    context = build_assistant_context(payload.chargeback_id, records=visible_disputes(request, store.list_disputes()))
     try:
         answer = generate_portfolio_answer(payload.question, context)
     except Exception as exc:

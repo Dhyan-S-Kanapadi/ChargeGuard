@@ -1,4 +1,5 @@
 import logging
+from core.runtime import evidence_uses_stubs
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -81,7 +82,7 @@ def _platform_order_timeline_response(state: ChargebackState) -> dict[str, Any]:
 
 
 def _collect_order_timeline_data(state: ChargebackState) -> tuple[dict[str, Any], str]:
-    if _env_flag("CHARGEGUARD_USE_STUBS"):
+    if evidence_uses_stubs("food_platform"):
         return _stub_order_timeline_response(state), "order_timeline_agent_stub"
     return _platform_order_timeline_response(state), "food_platform"
 

@@ -76,6 +76,7 @@ export class ApiClient {
     private readonly apiKey: string,
     private readonly timeoutMs = 12_000,
     private readonly demoToken = "",
+    private readonly accessToken?: () => Promise<string>,
   ) {}
 
   private async request<T>(path: string, options: RequestOptions<T>): Promise<T> {
@@ -88,7 +89,12 @@ export class ApiClient {
       const headers = new Headers({ Accept: "application/json" });
       if (options.auth !== false) {
         if (this.demoToken) headers.set("X-Demo-Session", this.demoToken);
-        else headers.set("X-API-Key", this.apiKey);
+        else if (this.accessToken) {
+          if (new URL(joinUrl(this.baseUrl, path)).origin !== window.location.origin) {
+            throw new ApiError("Merchant login is restricted to this application's origin.", 403);
+          }
+          headers.set("Authorization", `Bearer ${await this.accessToken()}`);
+        } else headers.set("X-API-Key", this.apiKey);
       }
       if (path === "/demo/session") headers.set("X-Demo-Request", "1");
       if (options.body !== undefined) headers.set("Content-Type", "application/json");
@@ -97,6 +103,7 @@ export class ApiClient {
         headers,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
         signal: controller.signal,
+        redirect: "error",
       });
       const isJson = response.headers.get("content-type")?.includes("application/json");
       const payload: unknown = isJson ? await response.json() : await response.text();
@@ -313,6 +320,24 @@ export class ApiClient {
       schema: SimulatorDisputeSchema.array(),
       signal,
     });
+  }
+
+  authConfig() {
+    return this.request("/auth/config", { auth: false, schema: z.discriminatedUnion("mode", [
+      z.object({ mode: z.literal("operator") }),
+      z.object({ mode: z.literal("supabase"), url: z.url(), publishable_key: z.string().startsWith("sb_publishable_") }),
+    ]) });
+  }
+
+  currentUser() {
+    return this.request("/auth/me", { schema: z.object({
+      user_id: z.uuid(), aal: z.enum(["aal1", "aal2"]), platform_admin: z.boolean(),
+      memberships: z.record(z.string(), z.enum(["owner", "reviewer", "read_only"])),
+    }) });
+  }
+
+  revokeSession() {
+    return this.request("/auth/session/revoke", { method: "POST", schema: z.object({ status: z.literal("revoked") }) });
   }
 
   demoStatus() {

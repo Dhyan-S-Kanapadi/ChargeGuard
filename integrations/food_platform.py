@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import httpx
+from core.runtime import require_live_provider
 
 
 class FoodPlatformConfigError(RuntimeError):
@@ -24,6 +25,7 @@ class FoodPlatformClient:
         timeout: float = 10.0,
         client: httpx.Client | None = None,
     ) -> None:
+        require_live_provider("food_platform")
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout

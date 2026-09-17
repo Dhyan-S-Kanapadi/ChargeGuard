@@ -1,6 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ApiClient, ApiError } from "../api/client";
 import type { Health } from "../api/schemas";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { merchantApi } from "./supabase";
 
 const SESSION_KEY = "chargeguard.connection.v1";
 
@@ -13,6 +15,7 @@ type Connection = {
 type ConnectionContextValue = Connection & {
   isDemo: boolean;
   startDemo: () => Promise<void>;
+  connectSupabase: (auth: SupabaseClient) => Promise<void>;
   client: ApiClient;
   connected: boolean;
   health: Health | null;
@@ -44,11 +47,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [health, setHealth] = useState<Health | null>(null);
   const [connected, setConnected] = useState(false);
   const [demoToken, setDemoToken] = useState("");
+  const [supabase, setSupabase] = useState<SupabaseClient | null>(null);
   const [selectedMerchantId, setSelectedMerchantId] = useState("");
   const restoreAttempted = useRef(false);
   const client = useMemo(
-    () => new ApiClient(connection.baseUrl, connection.apiKey, 12_000, demoToken),
-    [connection.apiKey, connection.baseUrl, demoToken],
+    () => supabase ? merchantApi(supabase) : new ApiClient(connection.baseUrl, connection.apiKey, 12_000, demoToken),
+    [connection.apiKey, connection.baseUrl, demoToken, supabase],
   );
 
   useEffect(() => {
@@ -98,7 +102,40 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     window.location.hash = "#/simulator";
   };
 
-  const disconnect = () => {
+  const connectSupabase = async (auth: SupabaseClient) => {
+    const candidate = merchantApi(auth);
+    const user = await candidate.currentUser();
+    if (user.platform_admin) throw new Error("Platform administration uses the protected admin API, not the merchant workspace.");
+    await candidate.stats();
+    setHealth(await candidate.health());
+    sessionStorage.removeItem(SESSION_KEY);
+    setConnection({ baseUrl: window.location.origin, apiKey: "", rememberForTab: false });
+    setDemoToken("");
+    setSupabase(auth);
+    setSelectedMerchantId(Object.keys(user.memberships)[0] ?? "");
+    setConnected(true);
+  };
+
+  useEffect(() => {
+    if (!supabase) return;
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") { setConnected(false); setSupabase(null); }
+    });
+    return () => data.subscription.unsubscribe();
+  }, [supabase]);
+
+  const disconnect = async () => {
+    if (supabase) {
+      // Keep the session visible if durable revocation fails; do not claim logout succeeded.
+      try { await client.revokeSession(); }
+      catch (error) {
+        if (!(error instanceof ApiError && [401, 403].includes(error.status))) {
+          window.alert("Logout could not revoke your session. Please retry; contact your administrator if it persists."); return;
+        }
+      }
+      await supabase.auth.signOut({ scope: "local" });
+      setSupabase(null);
+    }
     setDemoToken("");
     sessionStorage.removeItem(SESSION_KEY);
     setConnection({ baseUrl: window.location.origin, apiKey: "", rememberForTab: false });
@@ -112,6 +149,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       ...connection,
       isDemo: Boolean(demoToken),
       startDemo,
+      connectSupabase,
       client,
       connected,
       health,

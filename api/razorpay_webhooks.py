@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from api.razorpay_processor import process_razorpay_provider_event
 from api.store import store
+from core.runtime import contains_synthetic_data, runtime_environment
 from integrations.razorpay_webhook import (
     RazorpayWebhookError,
     parse_envelope,
@@ -116,6 +117,8 @@ async def receive_razorpay_webhook(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     dispute = envelope.payload.dispute.entity
+    if runtime_environment() == "production" and contains_synthetic_data(envelope.model_dump()):
+        raise HTTPException(status_code=422, detail="Synthetic events are forbidden in production.")
 
     claimed = store.claim_provider_event(
         _initial_event_record(

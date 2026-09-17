@@ -7,6 +7,7 @@ from threading import RLock
 from typing import Any
 
 from core.state import ChargebackState, is_filed_dispute
+from core.runtime import assert_workflow_environment
 from ml.features import FEATURE_NAMES, features_from_state
 from ml.model import WinProbabilityModel
 from ml.synthetic_data import generate_synthetic_dataset
@@ -49,6 +50,7 @@ def _int_env(name: str, default: int) -> int:
 
 
 def _feedback_record(state: ChargebackState) -> dict[str, Any]:
+    assert_workflow_environment(state)
     if state["chargeback_id"].startswith("disp_SIM_"):
         raise ValueError("synthetic simulator outcomes cannot train the real model")
     outcome = state.get("final_outcome")

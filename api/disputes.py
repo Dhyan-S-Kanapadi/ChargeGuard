@@ -4,10 +4,11 @@ import os
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
 
 from analytics.merchant_stats import merchant_dispute_ratio
 from api.auth import require_api_key
+from api.identity import visible_disputes, verified_actor
 from api.schemas import (
     CaseSummaryResponse,
     ClassificationSuggestionRejectRequest,
@@ -117,9 +118,9 @@ def _authorize_raw_access(include_raw: bool, internal_token: str | None) -> None
 
 
 @router.get("", response_model=list[DisputeSummary])
-def list_disputes() -> list[DisputeSummary]:
+def list_disputes(request: Request) -> list[DisputeSummary]:
     summaries: list[DisputeSummary] = []
-    for record in store.list_disputes():
+    for record in visible_disputes(request, store.list_disputes()):
         state = _redact_state(record["state"])
         summaries.append(
             DisputeSummary(
@@ -253,6 +254,7 @@ def _suggestion_response(
     response_model=ClassificationSuggestionResponse,
 )
 def suggest_dispute_classification(
+    request: Request,
     chargeback_id: str,
     payload: ClassificationSuggestionRequest,
 ) -> ClassificationSuggestionResponse:
@@ -323,7 +325,7 @@ def suggest_dispute_classification(
         "model": model,
         "prompt_schema_version": PROMPT_SCHEMA_VERSION,
         "created_at": datetime.now(timezone.utc),
-        "requested_by_actor_id": payload.actor_id,
+        "requested_by_actor_id": verified_actor(request, payload.actor_id),
         "status": status,
         "unavailability_reason": unavailable_reason,
     }
@@ -341,6 +343,7 @@ def suggest_dispute_classification(
     response_model=ClassificationSuggestionResponse,
 )
 def reject_dispute_classification_suggestion(
+    request: Request,
     chargeback_id: str,
     payload: ClassificationSuggestionRejectRequest,
 ) -> ClassificationSuggestionResponse:
@@ -350,7 +353,7 @@ def reject_dispute_classification_suggestion(
         suggestion = store.reject_classification_suggestion(
             chargeback_id,
             suggestion_id=payload.suggestion_id,
-            actor_id=payload.actor_id,
+            actor_id=verified_actor(request, payload.actor_id),
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -368,6 +371,7 @@ def reject_dispute_classification_suggestion(
     response_model=DisputeClassificationResponse,
 )
 def classify_dispute(
+    request: Request,
     chargeback_id: str,
     payload: DisputeClassificationRequest,
     background_tasks: BackgroundTasks,
@@ -400,7 +404,7 @@ def classify_dispute(
             chargeback_id,
             card_network=payload.card_network,
             network_reason_code=payload.network_reason_code,
-            actor_id=payload.actor_id,
+            actor_id=verified_actor(request, payload.actor_id),
             suggestion_id=payload.suggestion_id,
             minimum_suggestion_confidence=minimum_suggestion_confidence,
         )

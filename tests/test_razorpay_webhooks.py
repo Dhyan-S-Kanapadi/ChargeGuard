@@ -165,6 +165,14 @@ def test_invalid_missing_or_changed_signature_is_rejected() -> None:
     ).status_code == 401
 
 
+@pytest.mark.parametrize("dispute_id,simulator", [("disp_SIM_1", False), ("disp_1", True)])
+def test_production_rejects_signed_synthetic_event_before_claim(monkeypatch, dispute_id, simulator):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    raw = _raw_event(dispute_id=dispute_id, simulator=simulator)
+    assert _post(raw).status_code == 422
+    assert store.list_provider_events() == []
+
+
 def test_missing_event_id_uses_payload_hash_and_deduplicates(monkeypatch) -> None:
     assert store.create_merchant(_merchant())
     monkeypatch.setattr(webhooks, "run_chargeback_graph", lambda state: None)

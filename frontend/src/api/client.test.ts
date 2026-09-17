@@ -5,6 +5,24 @@ import { ApiClient, joinUrl } from "./client";
 import { server } from "../test/server";
 
 describe("ApiClient", () => {
+  it("uses a fresh bearer token and never the operator key for merchant requests", async () => {
+    const accessToken = vi.fn().mockResolvedValueOnce("token-one").mockResolvedValueOnce("token-two");
+    const seen: string[] = [];
+    server.use(http.get("http://localhost/stats", ({ request }) => {
+      expect(request.headers.has("X-API-Key")).toBe(false);
+      seen.push(request.headers.get("Authorization") ?? "");
+      return HttpResponse.json({ total_disputes_processed: 0, decisions: { FIGHT: 0, ACCEPT: 0, ESCALATE_DEGRADED: 0 }, win_rate: null, average_expected_value: null, evidence_collection_degraded_count: 0 });
+    }));
+    const client = new ApiClient("http://localhost", "must-not-send", 12000, "", accessToken);
+    await client.stats(); await client.stats();
+    expect(seen).toEqual(["Bearer token-one", "Bearer token-two"]);
+  });
+
+  it("refuses to send merchant credentials to another origin", async () => {
+    const accessToken = vi.fn().mockResolvedValue("never-send");
+    await expect(new ApiClient("https://other.invalid", "", 12000, "", accessToken).stats()).rejects.toMatchObject({ status: 403 });
+    expect(accessToken).not.toHaveBeenCalled();
+  });
   it("routes session traffic only to the restricted demo surface", async () => {
     server.use(http.get("http://localhost/demo/stats", ({ request }) => {
       expect(request.headers.get("X-Demo-Session")).toBe("restricted-token");

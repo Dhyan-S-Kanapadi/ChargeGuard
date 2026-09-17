@@ -1,4 +1,5 @@
 import logging
+from core.runtime import evidence_uses_stubs
 import os
 from typing import Any
 
@@ -18,11 +19,7 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 
 def _consortium_use_stubs(provider: str) -> bool:
-    override_name = "ETHOCA_USE_STUBS" if provider == "ethoca" else "VERIFI_USE_STUBS"
-    value = os.getenv(override_name)
-    if value is None:
-        return _env_flag("CHARGEGUARD_USE_STUBS")
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return evidence_uses_stubs(provider)
 
 
 def _empty_consortium_evidence(

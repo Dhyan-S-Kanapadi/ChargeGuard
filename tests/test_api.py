@@ -137,6 +137,7 @@ def _stats_state(
         ChargebackState,
         {
             "chargeback_id": chargeback_id,
+            "merchant_profile": _merchant_payload(),
             "decision": decision,
             "expected_value": expected_value,
             "final_outcome": final_outcome,
@@ -149,6 +150,7 @@ def _stats_state(
 
 
 def test_stats_returns_correct_seeded_aggregates(client: TestClient) -> None:
+    assert store.create_merchant(_merchant_payload())
     assert store.create_dispute(
         _stats_state(
             "cb_stats_win",

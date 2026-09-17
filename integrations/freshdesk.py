@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import httpx
+from core.runtime import require_live_provider
 
 from integrations.connector_config import connector_env_value
 
@@ -26,6 +27,7 @@ class FreshdeskClient:
         timeout: float = 10.0,
         client: httpx.Client | None = None,
     ) -> None:
+        require_live_provider("freshdesk")
         self.api_key = api_key
         self.domain = domain.replace("https://", "").replace("http://", "").rstrip("/")
         self.base_url = f"https://{self.domain}/api/v2"

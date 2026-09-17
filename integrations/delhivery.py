@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import httpx
+from core.runtime import require_live_provider
 
 
 DELHIVERY_BASE_URL = "https://track.delhivery.com"
@@ -27,6 +28,7 @@ class DelhiveryClient:
         timeout: float = 10.0,
         client: httpx.Client | None = None,
     ) -> None:
+        require_live_provider("delhivery")
         self.api_token = api_token
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout

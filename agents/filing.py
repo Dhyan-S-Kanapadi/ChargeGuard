@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.state import ChargebackState
+from core.runtime import assert_workflow_environment, runtime_environment
 
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,12 @@ def _confirmation_id(state: ChargebackState, filed_at: datetime) -> str:
 
 def filing_agent(state: ChargebackState) -> ChargebackState:
     """Record a filing confirmation for the prepared rebuttal."""
+    assert_workflow_environment(state)
+    if runtime_environment() == "production":
+        state["filed_at"] = None
+        state["filing_confirmation"] = "filing_blocked_production_adapter_unavailable"
+        state["final_outcome"] = "PENDING"
+        return state
     if not state.get("quality_approved"):
         state["filing_confirmation"] = "filing_blocked_quality_not_approved"
         return state

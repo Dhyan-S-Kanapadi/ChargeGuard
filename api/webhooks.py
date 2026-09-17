@@ -13,6 +13,7 @@ from api.store import store
 from core.deadlines import filing_deadline_for_network
 from core.graph import app as chargeback_graph
 from core.state import ChargebackState
+from core.runtime import contains_synthetic_data, runtime_environment
 
 
 logger = logging.getLogger(__name__)
@@ -142,6 +143,7 @@ def build_initial_state(
         }
     }
     state: ChargebackState = {
+        "data_environment": runtime_environment(),
         "chargeback_id": chargeback_id,
         "payment_id": payment_id,
         "reason_code": reason_code,
@@ -192,6 +194,8 @@ def create_and_schedule_dispute(
 ) -> tuple[ChargebackState, bool]:
     """Use the normalized path shared by internal and provider webhooks."""
     state = _initial_state(payload, merchant_profile)
+    if runtime_environment() == "production" and contains_synthetic_data(state):
+        raise HTTPException(status_code=422, detail="Synthetic workflows are forbidden in production.")
     if not store.create_dispute(state):
         return state, False
     background_tasks.add_task(run_chargeback_graph, state)

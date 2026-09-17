@@ -2,6 +2,7 @@ import logging
 from datetime import datetime, timezone
 
 from core.state import ChargebackState
+from core.runtime import assert_workflow_environment
 
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ def _build_investigation_plan(
 
 def orchestrator_agent(state: ChargebackState) -> ChargebackState:
     """Create the investigation plan and select vertical-specific evidence."""
+    assert_workflow_environment(state)
     logger.info("Running orchestrator agent for %s", state["chargeback_id"])
 
     requires_food_agents = _requires_food_agents(state)

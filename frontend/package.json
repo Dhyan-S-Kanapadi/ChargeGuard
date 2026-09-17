@@ -13,6 +13,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
     "@tanstack/react-query": "^5.85.5",
     "lucide-react": "^0.542.0",
     "react": "^19.1.1",

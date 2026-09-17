@@ -234,4 +234,9 @@ def test_simulation_fixture_requires_environment_and_ownership(monkeypatch, envi
     monkeypatch.setattr(device.store, "get_simulator_dispute", lambda case_id: {
         "merchant_id": merchant, "payment_id": payment, "scenario_id": "device-vpn-mismatch",
     })
-    assert device_agent(state)["device"]["fraud_score"] == 18
+    result = device_agent(state)
+    if environment == "production":
+        assert result["device"] is None
+        assert result["evidence_collection_degraded"] is True
+    else:
+        assert result["device"]["fraud_score"] == 18

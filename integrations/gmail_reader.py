@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import httpx
+from core.runtime import require_live_provider
 
 from integrations.connector_config import connector_env_value
 
@@ -30,6 +31,7 @@ class GmailReader:
         timeout: float = 10.0,
         client: httpx.Client | None = None,
     ) -> None:
+        require_live_provider("gmail")
         self.access_token = access_token
         self.user_id = user_id
         self.base_url = base_url.rstrip("/")
