@@ -1,0 +1,75 @@
+{
+  "entity": "event",
+  "account_id": "acc_connectivityfixture",
+  "event": "payment.dispute.created",
+  "contains": ["payment", "dispute"],
+  "payload": {
+    "payment": {
+      "entity": {
+        "id": "pay_connectivity_fixture",
+        "entity": "payment",
+        "amount": 5297600,
+        "currency": "INR",
+        "base_amount": 5297600,
+        "status": "captured",
+        "order_id": "order_connectivity_fixture",
+        "invoice_id": null,
+        "international": false,
+        "method": "card",
+        "amount_refunded": 700000,
+        "amount_transferred": 0,
+        "refund_status": "partial",
+        "captured": true,
+        "description": null,
+        "card_id": "card_connectivity_fixture",
+        "bank": "HDFC",
+        "wallet": null,
+        "vpa": null,
+        "email": "fixture@example.invalid",
+        "contact": null,
+        "notes": [],
+        "fee": 0,
+        "tax": 0,
+        "error_code": null,
+        "error_description": null,
+        "error_source": null,
+        "error_step": null,
+        "error_reason": null,
+        "acquirer_data": {},
+        "created_at": 1581525157
+      }
+    },
+    "dispute": {
+      "entity": {
+        "id": "disp_connectivity_fixture",
+        "entity": "dispute",
+        "payment_id": "pay_connectivity_fixture",
+        "amount": 39000,
+        "currency": "INR",
+        "amount_deducted": 0,
+        "reason_code": "processed_invalid_expired_card",
+        "respond_by": 1590431400,
+        "status": "open",
+        "phase": "chargeback",
+        "created_at": 1589907957,
+        "evidence": {
+          "amount": 39000,
+          "summary": null,
+          "shipping_proof": null,
+          "billing_proof": null,
+          "cancellation_proof": null,
+          "customer_communication": null,
+          "proof_of_service": null,
+          "explanation_letter": null,
+          "refund_confirmation": null,
+          "access_activity_log": null,
+          "refund_cancellation_policy": null,
+          "term_and_conditions": null,
+          "others": null,
+          "submitted_at": null
+        }
+      }
+    }
+  },
+  "created_at": 1589907977
+}

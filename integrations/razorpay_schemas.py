@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class RazorpayCardEntity(BaseModel):
@@ -23,6 +23,12 @@ class RazorpayPaymentEntity(BaseModel):
     card: RazorpayCardEntity | None = None
     notes: dict[str, Any] = Field(default_factory=dict)
     created_at: int | None = None
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def normalize_empty_notes(cls, value: Any) -> Any:
+        # Razorpay documents [] for empty notes. Other shapes still fail validation.
+        return {} if isinstance(value, list) and not value else value
 
 
 class RazorpayDisputeEntity(BaseModel):

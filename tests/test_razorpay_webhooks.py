@@ -2,18 +2,149 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import json
+from pathlib import Path
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from api import webhooks
 from api.store import InMemoryStore, store
 from core.state import MerchantProfile
 from integrations.razorpay import RazorpayRequestError
+from integrations.razorpay_schemas import RazorpayPaymentEntity
+from integrations.razorpay_webhook import parse_envelope
+from integrations.credential_secrets import reset_credential_secret_store_cache
 from main import app
 
 
 SECRET = "webhook-test-secret"
+
+
+@pytest.fixture
+def official_event():
+    # Official shape, synthetic identifiers/contact; timestamps intentionally expired.
+    # https://razorpay.com/docs/webhooks/disputes (checked 2026-09-18)
+    return json.loads((Path(__file__).parent / "fixtures" / "razorpay_official_dispute.json").read_text())
+
+
+@pytest.mark.parametrize("event", ["created", "won", "lost", "closed", "under_review", "action_required"])
+def test_official_shapes_are_queued_once_before_processing(monkeypatch, official_event, event):
+    from api import razorpay_webhooks
+
+    official_event["event"] = f"payment.dispute.{event}"
+    dispute = official_event["payload"]["dispute"]
+    dispute["entity"]["status"] = "open" if event in {"created", "action_required"} else event
+    if event in {"won", "under_review", "closed"}:
+        official_event["payload"]["payment"]["entity"].update(order_id=None, fee=None, tax=None)
+    if event == "action_required":
+        dispute["evidence"] = dispute["entity"].pop("evidence")
+    scheduled = []
+
+    def enqueue(tasks, event_id):
+        saved = store.get_provider_event(event_id)
+        assert saved["processing_state"] == "queued"
+        assert saved["event_data"]["payload"]["payment"]["entity"]["notes"] == {}
+        assert "fixture@example.invalid" not in json.dumps(saved, default=str)
+        scheduled.append(event_id)
+
+    monkeypatch.setattr(razorpay_webhooks, "enqueue_razorpay_provider_event", enqueue)
+    raw = json.dumps(official_event).encode()
+    assert _post(raw).status_code == 202
+    assert _post(raw).json()["status"] == "duplicate"
+    assert scheduled == ["evt_1"]
+    assert store.get_dispute("disp_connectivity_fixture") is None
+
+
+@pytest.mark.parametrize("notes", [[], {}, {"commerce_order_id": "fixture-order", "nested": {"a": 1}}])
+def test_payment_notes_normalization_preserves_dictionaries(official_event, notes):
+    payment = official_event["payload"]["payment"]["entity"]
+    payment["notes"] = notes
+    parsed = parse_envelope(json.dumps(official_event).encode())
+    assert parsed.payload.payment.entity.notes == ({} if notes == [] else notes)
+    # The same entity schema protects REST enrichment and stored-envelope parsing.
+    assert RazorpayPaymentEntity.model_validate(payment).notes == parsed.payload.payment.entity.notes
+    del payment["notes"]
+    assert RazorpayPaymentEntity.model_validate(payment).notes == {}
+
+
+@pytest.mark.parametrize("notes", [["bad"], [["key", "value"]], [{}], None, "", "{}", 0, False])
+def test_signed_malformed_notes_rejected_without_persistence(official_event, notes):
+    official_event["payload"]["payment"]["entity"]["notes"] = notes
+    assert _post(json.dumps(official_event).encode()).status_code == 422
+    assert store.list_provider_events() == []
+
+
+def test_official_empty_notes_normalization_cannot_bypass_signature(official_event):
+    raw = json.dumps(official_event).encode()
+    official_event["payload"]["payment"]["entity"]["notes"] = {}
+    changed = json.dumps(official_event).encode()
+    assert TestClient(app).post("/webhook/razorpay", content=changed, headers=_headers(raw)).status_code == 401
+    assert store.list_provider_events() == []
+
+
+@pytest.mark.parametrize("provider_status", [200, 401, 404])
+def test_official_sample_recovers_with_owned_test_connector(
+    monkeypatch, tmp_path, official_event, provider_status,
+):
+    from integrations.razorpay import RazorpayClient
+
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+    monkeypatch.setenv("CHARGEGUARD_USE_STUBS", "true")
+    monkeypatch.setenv("RAZORPAY_USE_STUBS", "false")
+    monkeypatch.setenv("ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK", "false")
+    monkeypatch.setenv("CASE_SUMMARY_USE_STUBS", "true")
+    monkeypatch.setenv("CHARGEGUARD_CREDENTIAL_STORE_PATH", str(tmp_path / "secrets.json"))
+    monkeypatch.setenv("CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    reset_credential_secret_store_cache()
+    calls = []
+
+    def request(self, method, path, **kwargs):
+        # Real connector resolver and client; all HTTP is intercepted here.
+        assert self.key_id == "rzp_test_connectivityfixture"
+        assert method == "GET"  # No accept, contest or upload is allowed.
+        calls.append(path)
+        if path == "/payments":
+            return {"entity": "collection", "items": []}
+        assert path == "/payments/pay_connectivity_fixture"
+        if provider_status != 200:
+            raise RazorpayRequestError("inaccessible sample", status_code=provider_status)
+        return {"id": "pay_connectivity_fixture", "method": "card", "notes": [],
+                "order_id": "order_connectivity_fixture", "card": {"network": "Visa"}}
+
+    monkeypatch.setattr(RazorpayClient, "_request", request)
+    monkeypatch.setattr(webhooks, "run_chargeback_graph", lambda state: pytest.fail("Sample must require human review"))
+    try:
+        raw = json.dumps(official_event).encode()
+        assert _post(raw).status_code == 202
+        assert store.get_provider_event("evt_1")["processing_state"] == "unresolved"
+        assert calls == []
+        client = TestClient(app, headers={"X-API-Key": "test-api-key"})
+        assert client.post("/merchants", json=_merchant("acc_connectivityfixture")).status_code == 201
+        connected = client.post("/merchants/merchant_rzp/payment-connectors/razorpay", json={
+            "key_id": "rzp_test_connectivityfixture", "key_secret": "fixture-only-secret",
+            "razorpay_account_id": "acc_connectivityfixture",
+        })
+        assert connected.status_code == 201
+        assert client.post("/internal/razorpay/events/evt_1/retry").status_code == 200
+        assert calls == ["/payments", "/payments/pay_connectivity_fixture"]
+        assert store.get_provider_event("evt_1")["processing_state"] == "manual_review"
+        state = store.get_dispute("disp_connectivity_fixture")["state"]
+        assert state["data_environment"] == "staging"
+        assert state["decision"] == "ESCALATE_DEGRADED"
+        assert state["final_outcome"] == "PENDING"
+        assert "respond_by_overdue" in state["degraded_reasons"]
+        assert "network_reason_code_unavailable" in state["degraded_reasons"]
+        assert not state.get("filed_at")
+        if provider_status == 200:
+            assert state["card_network"] == "VISA"
+        else:
+            assert state.get("card_network") is None
+            assert "razorpay_payment_enrichment_failed" in state["degraded_reasons"]
+        assert _post(raw).json()["status"] == "duplicate"
+        assert len(calls) == 2
+    finally:
+        reset_credential_secret_store_cache()
 
 
 @pytest.fixture(autouse=True)
