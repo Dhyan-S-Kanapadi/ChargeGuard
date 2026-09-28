@@ -4,6 +4,11 @@ Before performing substantial work in this repository, read the root-level `CLAU
 
 Before coding, also read the root-level `PONYTAIL.md` and apply its ChargeGuard-specific Ponytail policy.
 
+For a first-time contributor or coding agent, begin with `CONTRIBUTING.md`, then
+read `TOOLS.md` and `ROADMAP.md` before selecting work. These documents provide
+the setup, existing toolchain, current delivery boundary, and planned stages;
+they do not override code, schemas, tests, or this file.
+
 ChargeGuard is a financial dispute and chargeback management system. Keep responsibilities separated: `CLAUDE.md` owns project knowledge and architectural context; this `AGENTS.md` owns Codex operating rules, engineering constraints, safety requirements, testing expectations, and development practices. The executable code, schemas, and tests remain authoritative when documentation and behavior differ.
 
 ## Priority Order

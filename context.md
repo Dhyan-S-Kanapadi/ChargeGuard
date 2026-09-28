@@ -1,4 +1,8 @@
-# ChargeGuard Project Context
+# ChargeGuard Project Context (historical)
+
+> This file records an early project snapshot and is not current planning
+> guidance. Start with `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `TOOLS.md`,
+> and `ROADMAP.md`; then verify behavior in code, schemas, and tests.
 
 ## Current Repository State
 
