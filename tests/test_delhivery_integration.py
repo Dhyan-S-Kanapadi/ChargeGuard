@@ -44,5 +44,6 @@ def test_delhivery_client_raises_for_error_response() -> None:
         ),
     )
 
-    with pytest.raises(DelhiveryRequestError):
+    with pytest.raises(DelhiveryRequestError) as error:
         client.get_tracking("awb_123")
+    assert "unauthorized" not in str(error.value)

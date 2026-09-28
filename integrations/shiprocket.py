@@ -16,6 +16,11 @@ class ShiprocketConfigError(RuntimeError):
 class ShiprocketRequestError(RuntimeError):
     """Raised when Shiprocket returns an error response."""
 
+    def __init__(self, code: str, *, status_code: int | None = None) -> None:
+        self.code = code
+        self.status_code = status_code
+        super().__init__(code)
+
 
 class ShiprocketClient:
     """Small Shiprocket API client for shipping evidence collection."""
@@ -65,7 +70,7 @@ class ShiprocketClient:
         )
         token = response.get("token")
         if not token:
-            raise ShiprocketRequestError("Shiprocket auth response did not include a token.")
+            raise ShiprocketRequestError("shiprocket_auth_token_missing")
 
         self._token = str(token)
         return self._token
@@ -114,6 +119,12 @@ class ShiprocketClient:
         )
         if response.status_code >= 400:
             raise ShiprocketRequestError(
-                f"Shiprocket request failed with {response.status_code}: {response.text}"
+                "shiprocket_request_failed", status_code=response.status_code
             )
-        return response.json()
+        try:
+            parsed = response.json()
+        except ValueError as exc:
+            raise ShiprocketRequestError("shiprocket_invalid_response") from exc
+        if not isinstance(parsed, dict):
+            raise ShiprocketRequestError("shiprocket_invalid_response")
+        return parsed

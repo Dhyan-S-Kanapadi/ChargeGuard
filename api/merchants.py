@@ -44,6 +44,7 @@ def _response(profile: MerchantProfile) -> MerchantResponse:
         device_risk_connector_id=profile.get("device_risk_connector_id"),
         razorpay_account_id=profile.get("razorpay_account_id"),
         shipping_provider=profile.get("shipping_provider"),
+        shipping_connector_ids=profile.get("shipping_connector_ids", {}),
         support_connector_ref=profile.get("support_connector_ref"),
         freshdesk_domain=profile.get("freshdesk_domain", ""),
         gmail_user_id=profile.get("gmail_user_id"),

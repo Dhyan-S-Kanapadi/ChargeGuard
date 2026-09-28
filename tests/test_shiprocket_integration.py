@@ -62,8 +62,9 @@ def test_shiprocket_client_raises_when_auth_token_is_missing() -> None:
         client=httpx.Client(transport=httpx.MockTransport(handler), base_url="https://apiv2.shiprocket.in"),
     )
 
-    with pytest.raises(ShiprocketRequestError):
+    with pytest.raises(ShiprocketRequestError) as error:
         client.get_tracking("awb_123")
+    assert "not found" not in str(error.value)
 
 
 def test_shiprocket_client_raises_for_error_response() -> None:

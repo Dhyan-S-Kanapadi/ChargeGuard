@@ -16,6 +16,11 @@ class DelhiveryConfigError(RuntimeError):
 class DelhiveryRequestError(RuntimeError):
     """Raised when Delhivery returns an invalid or error response."""
 
+    def __init__(self, code: str, *, status_code: int | None = None) -> None:
+        self.code = code
+        self.status_code = status_code
+        super().__init__(code)
+
 
 class DelhiveryClient:
     """Small Delhivery tracking client for shipping evidence collection."""
@@ -59,9 +64,12 @@ class DelhiveryClient:
         )
         if response.status_code >= 400:
             raise DelhiveryRequestError(
-                f"Delhivery request failed with {response.status_code}: {response.text}"
+                "delhivery_request_failed", status_code=response.status_code
             )
-        parsed = response.json()
+        try:
+            parsed = response.json()
+        except ValueError as exc:
+            raise DelhiveryRequestError("delhivery_invalid_response") from exc
         if not isinstance(parsed, dict):
-            raise DelhiveryRequestError("Delhivery response was not an object.")
+            raise DelhiveryRequestError("delhivery_invalid_response")
         return parsed
