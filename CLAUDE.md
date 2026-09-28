@@ -2,6 +2,13 @@
 
 This file is the operating manual for AI coding agents working in this repository. Read it before changing code. The executable code, schemas, and tests are authoritative. `context.md` and `branches.md` are historical notes and contain stale branch, dependency, and architecture information.
 
+## Contributor handoff
+
+New contributors and coding agents should start with [CONTRIBUTING.md](CONTRIBUTING.md),
+then use [TOOLS.md](TOOLS.md) for setup and [ROADMAP.md](ROADMAP.md) for the
+approved delivery order. This file remains the architectural source of context;
+the executable code, schemas, and tests remain the source of current behavior.
+
 ## Project Mission
 
 ChargeGuard automates chargeback investigation and dispute preparation for Indian merchants. It receives a normalized chargeback or a signed Razorpay dispute webhook, gathers evidence, predicts the probability of winning, computes the expected value of fighting, and chooses one of three actions:

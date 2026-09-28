@@ -1,4 +1,8 @@
-# Branch Plan
+# Branch Plan (historical)
+
+> This is an early branch-planning note, not the current branch strategy. Check
+> `git branch --show-current`, `git status --short`, and `ROADMAP.md` before
+> starting work. Do not create or merge branches without explicit authorization.
 
 ## Create Now
 

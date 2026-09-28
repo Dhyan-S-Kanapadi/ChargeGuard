@@ -4,6 +4,10 @@ This is a staged implementation, not a production-readiness claim. The public
 reviewer deployment remains unchanged. No deployment, migration of real data,
 live provider request, commit or push is part of this work.
 
+For a contributor-facing summary of the remaining stages, see
+[ROADMAP.md](ROADMAP.md). The detailed stage prompts remain in
+[PRODUCTION_IMPLEMENTATION_PROMPTS.md](PRODUCTION_IMPLEMENTATION_PROMPTS.md).
+
 ## 1. Environment boundary
 
 Explicit profiles: development, test, demo, staging, production. The existing

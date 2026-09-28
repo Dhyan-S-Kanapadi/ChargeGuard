@@ -2,6 +2,13 @@
 
 Autonomous chargeback dispute management for Indian merchants.
 
+## New contributor or coding agent?
+
+Start with [CONTRIBUTING.md](CONTRIBUTING.md). It links the authoritative
+engineering rules, architecture guide, toolchain/setup instructions, end-to-end
+flowchart, and the planned work that remains. In short: this is a local/staging
+prototype; no component submits a real chargeback response today.
+
 ## Live Demo
 
 **[Try ChargeGuard](https://chargeguard-ig9d.onrender.com/dashboard/)** — open the dashboard and click **Try Demo**. No API key is required for reviewer access.
@@ -747,6 +754,10 @@ Learning artifacts are written under:
 These generated outputs should not be committed unless intentionally adding a fixture.
 
 ## Roadmap
+
+The maintained delivery order and production gaps are in
+[ROADMAP.md](ROADMAP.md). The detailed implementation prompts are in
+[PRODUCTION_IMPLEMENTATION_PROMPTS.md](PRODUCTION_IMPLEMENTATION_PROMPTS.md).
 
 Near-term:
 
