@@ -11,7 +11,7 @@ CORRELATION_UNAVAILABLE = "commerce_order_correlation_unavailable"
 def _apply_order(state: ChargebackState, order: OrderRecord, source: str) -> None:
     state["commerce_order_id"] = order["order_id"]
     state["order_id"] = order["order_id"]
-    for field in ("commerce_order_number", "tracking_id", "fulfillment_id"):
+    for field in ("commerce_order_number", "tracking_id", "shipping_provider", "fulfillment_id"):
         value = order.get(field)
         if value:
             state[field] = value

@@ -140,6 +140,7 @@ def test_lists_stats_and_ai_are_tenant_scoped(tenant_api, monkeypatch):
 @pytest.mark.parametrize("method,path,body", [
     ("GET", "/disputes/case_b", None), ("GET", "/disputes/case_b/summary", None),
     ("GET", "/merchants/merchant_b", None), ("GET", "/merchants/merchant_b/payment-connectors", None),
+    ("GET", "/merchants/merchant_b/shipping-connectors", None),
     ("GET", "/merchants/merchant_b/device-risk-connectors", None),
     ("PATCH", "/merchants/merchant_b", {"name": "stolen"}),
     ("POST", "/orders/ingest", {"merchant_id": "merchant_b"}),
@@ -147,6 +148,7 @@ def test_lists_stats_and_ai_are_tenant_scoped(tenant_api, monkeypatch):
     ("POST", "/disputes/case_b/outcome", {"outcome": "WIN"}),
     ("POST", "/disputes/case_b/classification", {}),
     ("POST", "/merchants/merchant_b/payment-connectors/razorpay", {}),
+    ("POST", "/merchants/merchant_b/shipping-connectors/shiprocket", {}),
     ("DELETE", "/merchants/merchant_b/device-risk-connectors/foreign", None),
     ("GET", "/stats?merchant_id=merchant_b", None),
     ("GET", "/disputes?merchant_id=merchant_a&merchant_id=merchant_b", None),

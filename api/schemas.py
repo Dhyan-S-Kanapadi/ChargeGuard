@@ -85,6 +85,7 @@ class MerchantResponse(BaseModel):
     device_risk_connector_id: str | None = None
     razorpay_account_id: str | None = None
     shipping_provider: str | None = None
+    shipping_connector_ids: dict[str, str] = Field(default_factory=dict)
     support_connector_ref: str | None = None
     freshdesk_domain: str
     gmail_user_id: str | None = None
@@ -151,6 +152,60 @@ class PaymentConnectorResponse(BaseModel):
     last_error_code: str | None = None
 
 
+class _ShippingVerification(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    verification_tracking_id: str = Field(
+        min_length=3, max_length=200, pattern=r"^[A-Za-z0-9_-]+$"
+    )
+
+    @field_validator("verification_tracking_id")
+    @classmethod
+    def strip_tracking_id(cls, value: str) -> str:
+        return value.strip()
+
+
+class ShiprocketConnectorCreate(_ShippingVerification):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=500)
+
+    @field_validator("email", "password")
+    @classmethod
+    def strip_shiprocket_credentials(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped or any(character.isspace() for character in stripped):
+            raise ValueError("Shiprocket credential fields must not contain whitespace.")
+        return stripped
+
+
+class DelhiveryConnectorCreate(_ShippingVerification):
+    api_token: str = Field(min_length=8, max_length=500)
+
+    @field_validator("api_token")
+    @classmethod
+    def strip_delhivery_token(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped or any(character.isspace() for character in stripped):
+            raise ValueError("Delhivery API token must not contain whitespace.")
+        return stripped
+
+
+class ShippingConnectorVerify(_ShippingVerification):
+    pass
+
+
+class ShippingConnectorResponse(BaseModel):
+    connector_id: str
+    merchant_id: str
+    provider: Literal["shiprocket", "delhivery"]
+    status: Literal["pending", "verified", "invalid", "disconnected"]
+    credential_hint: str
+    verified_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    last_error_code: str | None = None
+
+
 class SeonConnectorCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -193,6 +248,7 @@ class OrderIngestRequest(BaseModel):
     provider_order_id: str | None = Field(default=None, min_length=1, max_length=200)
     commerce_order_number: str | None = Field(default=None, min_length=1, max_length=200)
     tracking_id: str | None = Field(default=None, min_length=1, max_length=200)
+    shipping_provider: Literal["shiprocket", "delhivery"] | None = None
     fulfillment_id: str | None = Field(default=None, min_length=1, max_length=200)
 
     @field_validator(
@@ -335,6 +391,7 @@ class ChargebackWebhookPayload(BaseModel):
     order_id: str = Field(min_length=1, max_length=200)
     payment_id: str = Field(min_length=1, max_length=200)
     tracking_id: str | None = None
+    shipping_provider: Literal["shiprocket", "delhivery"] | None = None
     card_fingerprint: str | None = None
     simulate_evidence_degraded: bool = False
 

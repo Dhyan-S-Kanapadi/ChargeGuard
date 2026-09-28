@@ -98,29 +98,22 @@ def test_shipping_builder_accepts_provider_payload_variants() -> None:
     assert evidence["delivery_photo_url"] == "https://example.test/pod/awb_variant_001.jpg"
 
 
-def test_shipping_agent_uses_delhivery_when_shiprocket_fails(monkeypatch) -> None:
+def test_shipping_agent_never_falls_back_to_another_provider(monkeypatch) -> None:
     monkeypatch.delenv("CHARGEGUARD_USE_STUBS", raising=False)
+    state = _state()
+    state["merchant_profile"]["shipping_provider"] = "shiprocket"
+    seen = []
     monkeypatch.setattr(
-        shipping,
-        "_collect_shiprocket",
-        lambda state: (_ for _ in ()).throw(RuntimeError("Shiprocket unavailable")),
-    )
-    monkeypatch.setattr(
-        shipping,
-        "_collect_delhivery",
-        lambda state: {
-            "tracking_id": state["tracking_id"],
-            "courier": "Delhivery",
-            "status": "DELIVERED",
-            "delivered_at": "2026-05-20T10:15:00Z",
-        },
+        shipping.shipping_client_factory,
+        "for_merchant",
+        lambda merchant, provider: seen.append(provider) or (_ for _ in ()).throw(RuntimeError("unavailable")),
     )
 
-    result = shipping_agent(_state())
+    result = shipping_agent(state)
 
     assert result["shipping"] is not None
-    assert result["shipping"]["courier"] == "Delhivery"
-    assert result["shipping"]["raw"]["source"] == "delhivery"
+    assert result["shipping"]["status"] == "UNKNOWN"
+    assert seen == ["shiprocket"]
 
 
 def test_shipping_agent_records_empty_evidence_on_collection_failure(monkeypatch) -> None:

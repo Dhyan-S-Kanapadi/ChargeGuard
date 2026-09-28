@@ -27,15 +27,17 @@ class StoreConflictError(ValueError):
 
 TABLES = {
     "merchants": ("merchant_id",), "payment_connectors": ("connector_id",),
+    "shipping_connectors": ("connector_id",),
     "device_risk_connectors": ("connector_id",), "orders": ("merchant_id", "order_id"),
     "disputes": ("chargeback_id",), "provider_events": ("event_id",),
     "simulator_disputes": ("dispute_id",),
-    "payment_connector_audit": (), "device_risk_connector_audit": (),
+    "payment_connector_audit": (), "shipping_connector_audit": (), "device_risk_connector_audit": (),
 }
 # Explicit allowlist: a future local method needs a database-contract review.
 READS = frozenset({
     "get_merchant", "get_merchant_by_razorpay_account_id", "list_merchants",
     "get_payment_connector", "list_payment_connectors", "list_payment_connector_audit",
+    "get_shipping_connector", "list_shipping_connectors", "list_shipping_connector_audit",
     "get_device_risk_connector", "list_device_risk_connectors", "list_device_risk_connector_audit",
     "get_order", "get_order_by_provider_payment_id", "get_order_by_provider_order_id",
     "get_order_by_commerce_order_number", "query_orders", "get_dispute", "list_disputes",
@@ -45,6 +47,8 @@ READS = frozenset({
 WRITES = frozenset({
     "create_merchant", "update_merchant", "create_payment_connector", "activate_payment_connector",
     "update_payment_connector_status", "disconnect_payment_connector", "configure_device_risk_connector",
+    "create_shipping_connector", "activate_shipping_connector", "update_shipping_connector_status",
+    "disconnect_shipping_connector",
     "activate_device_risk_connector", "update_device_risk_connector_status", "disconnect_device_risk_connector",
     "upsert_order", "create_order", "mark_order_disputed", "create_dispute", "update_dispute",
     "claim_dispute_classification", "save_classification_suggestion", "reject_classification_suggestion",
@@ -114,6 +118,8 @@ class PostgresStore:
             setattr(domain, "_" + table, result)
         for row in connection.execute("SELECT * FROM merchant_payment_links"):
             domain._merchants[row["merchant_id"]].setdefault("payment_connector_ids", {})[row["provider"]] = row["connector_id"]
+        for row in connection.execute("SELECT * FROM merchant_shipping_links"):
+            domain._merchants[row["merchant_id"]].setdefault("shipping_connector_ids", {})[row["provider"]] = row["connector_id"]
         for row in connection.execute("SELECT * FROM merchant_volumes"):
             domain._merchants[row["merchant_id"]].setdefault("transaction_volume_30d_by_network", {})[row["network"]] = row["transaction_count"]
         return domain
@@ -206,7 +212,7 @@ class PostgresStore:
                 if table == "merchants":
                     if any(record.get(key) for key in _MERCHANT_CREDENTIAL_KEYS):
                         raise StoreConflictError("Storefront secret persistence requires the managed secret backend (stage 4).")
-                    for key in (*_MERCHANT_CREDENTIAL_KEYS, "payment_connector_ids", "transaction_volume_30d_by_network"):
+                    for key in (*_MERCHANT_CREDENTIAL_KEYS, "payment_connector_ids", "shipping_connector_ids", "transaction_volume_30d_by_network"):
                         record.pop(key, None)
                 elif table == "disputes":
                     record["merchant_id"] = record["state"]["merchant_profile"]["merchant_id"]
@@ -228,6 +234,7 @@ class PostgresStore:
             previous = before["merchants"].get(identifier, {})
             for field, table, key, value in (
                 ("payment_connector_ids", "merchant_payment_links", "provider", "connector_id"),
+                ("shipping_connector_ids", "merchant_shipping_links", "provider", "connector_id"),
                 ("transaction_volume_30d_by_network", "merchant_volumes", "network", "transaction_count"),
             ):
                 mapping = merchant.get(field) or {}
@@ -254,6 +261,6 @@ class PostgresStore:
         with connect(self.database_url) as connection:
             connection.execute("SELECT pg_advisory_xact_lock(%s)", (STORE_LOCK,))
             self._check_environment(connection)
-            tables = list(TABLES) + ["merchant_payment_links", "merchant_volumes", "store_audit",
+            tables = list(TABLES) + ["merchant_payment_links", "merchant_shipping_links", "merchant_volumes", "store_audit",
                                     "access_audit", "app_sessions", "merchant_memberships", "app_users"]
             connection.execute(sql.SQL("TRUNCATE {} RESTART IDENTITY").format(sql.SQL(",").join(map(sql.Identifier, tables))))

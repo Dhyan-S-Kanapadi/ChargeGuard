@@ -14,6 +14,7 @@ class MerchantProfile(TypedDict):
     device_risk_connector_id: NotRequired[str | None]
     razorpay_account_id: NotRequired[str | None]
     shipping_provider: NotRequired[Literal["shiprocket", "delhivery"]]
+    shipping_connector_ids: NotRequired[dict[str, str]]
     support_connector_ref: NotRequired[str | None]
     freshdesk_domain: str
     gmail_user_id: NotRequired[str | None]
@@ -35,6 +36,18 @@ class PaymentConnector(TypedDict):
     merchant_id: str
     provider: Literal["razorpay", "stripe"]
     provider_account_id: str | None
+    status: Literal["pending", "verified", "invalid", "disconnected"]
+    credential_hint: str
+    verified_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    last_error_code: str | None
+
+
+class ShippingConnector(TypedDict):
+    connector_id: str
+    merchant_id: str
+    provider: Literal["shiprocket", "delhivery"]
     status: Literal["pending", "verified", "invalid", "disconnected"]
     credential_hint: str
     verified_at: datetime | None
@@ -71,6 +84,7 @@ class OrderRecord(TypedDict):
     provider_order_id: NotRequired[str]
     commerce_order_number: NotRequired[str]
     tracking_id: NotRequired[str]
+    shipping_provider: NotRequired[Literal["shiprocket", "delhivery"]]
     fulfillment_id: NotRequired[str]
 
 
@@ -200,6 +214,7 @@ class ChargebackState(TypedDict):
     commerce_order_id: NotRequired[str]
     commerce_order_number: NotRequired[str]
     tracking_id: NotRequired[str]
+    shipping_provider: NotRequired[Literal["shiprocket", "delhivery"]]
     fulfillment_id: NotRequired[str]
     correlation_status: NotRequired[Literal["resolved", "unresolved"]]
     correlation_source: NotRequired[str]

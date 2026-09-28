@@ -23,6 +23,7 @@ from api.device_risk_connectors import router as device_risk_connectors_router
 from api.merchants import router as merchants_router
 from api.orders import router as orders_router
 from api.payment_connectors import router as payment_connectors_router
+from api.shipping_connectors import router as shipping_connectors_router
 from api.razorpay_admin import (
     router as razorpay_admin_router,
     schedule_startup_razorpay_recovery,
@@ -116,6 +117,11 @@ async def validation_exception_handler(
             status_code=422,
             content={"detail": "invalid_payment_connector_request"},
         )
+    if "/shipping-connectors" in request.url.path:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "invalid_shipping_connector_request"},
+        )
     return await request_validation_exception_handler(request, exc)
 
 
@@ -125,6 +131,7 @@ app.include_router(disputes_router)
 app.include_router(merchants_router)
 app.include_router(orders_router)
 app.include_router(payment_connectors_router)
+app.include_router(shipping_connectors_router)
 app.include_router(device_risk_connectors_router)
 app.include_router(stats_router)
 app.include_router(assistant_router)

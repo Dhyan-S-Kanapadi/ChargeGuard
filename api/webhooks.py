@@ -110,6 +110,7 @@ def _initial_state(
             ["demo_simulation"] if payload.simulate_evidence_degraded else []
         ),
         tracking_id=payload.tracking_id,
+        shipping_provider=payload.shipping_provider,
         card_fingerprint=payload.card_fingerprint,
     )
 
@@ -129,6 +130,7 @@ def build_initial_state(
     evidence_collection_degraded: bool = False,
     degraded_reasons: list[str] | None = None,
     tracking_id: str | None = None,
+    shipping_provider: str | None = None,
     card_fingerprint: str | None = None,
 ) -> ChargebackState:
     received_at = received_at or datetime.now(timezone.utc)
@@ -182,6 +184,8 @@ def build_initial_state(
         state["order_id"] = order_id
     if tracking_id:
         state["tracking_id"] = tracking_id
+    if shipping_provider in {"shiprocket", "delhivery"}:
+        state["shipping_provider"] = shipping_provider
     if card_fingerprint:
         state["card_fingerprint"] = card_fingerprint
     return state

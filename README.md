@@ -49,7 +49,7 @@ Implemented:
 - LangGraph workflow with all core nodes wired
 - Orchestrator playbook routing
 - Razorpay and Stripe support with merchant-scoped encrypted payment connectors
-- Shipping evidence with Shiprocket and Delhivery support
+- Merchant-scoped, read-only Shiprocket and Delhivery shipping evidence connectors
 - Communications evidence with Freshdesk and Gmail reader support
 - Device evidence with merchant-scoped encrypted SEON connectors
 - Consortium evidence with Ethoca and Verifi support
@@ -425,8 +425,8 @@ Providers:
 | --- | --- |
 | `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | Deprecated local-only fallback when explicitly enabled. |
 | `STRIPE_API_KEY` | Deprecated local-only fallback when explicitly enabled. |
-| `SHIPROCKET_EMAIL` / `SHIPROCKET_PASSWORD` | Shiprocket shipment evidence. |
-| `DELHIVERY_API_TOKEN` | Delhivery fallback shipment evidence. |
+| `SHIPROCKET_EMAIL` / `SHIPROCKET_PASSWORD` | Legacy local-test helpers; live evidence resolves a verified merchant connector. |
+| `DELHIVERY_API_TOKEN` | Legacy local-test helper; live evidence resolves a verified merchant connector. |
 | `FRESHDESK_API_KEY` / `FRESHDESK_DOMAIN` | Support ticket evidence. |
 | `GMAIL_ACCESS_TOKEN` / `GMAIL_USER_ID` | Gmail thread evidence. |
 | `SEON_API_KEY` | Deprecated local-only SEON fallback, used only with `ALLOW_GLOBAL_SEON_CREDENTIAL_FALLBACK=true`. |
@@ -486,7 +486,7 @@ The Dockerfile uses a Node 22 build stage and `npm ci` to compile the dashboard,
 Evidence agents are built to prefer the configured merchant provider and fall back where supported:
 
 - Payments: Razorpay or Stripe.
-- Shipping: Shiprocket, with Delhivery fallback.
+- Shipping: exactly the provider correlated to the shipment; Shiprocket and Delhivery never fall back to one another.
 - Communications: Freshdesk and Gmail can both contribute evidence.
 - Fraud/device: SEON.
 - Consortium: Ethoca and Verifi.
