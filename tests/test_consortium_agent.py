@@ -69,13 +69,11 @@ def test_consortium_agent_populates_only_consortium_evidence(monkeypatch) -> Non
 def test_consortium_builder_detects_cross_merchant_risk() -> None:
     response = {
         "ethoca": {
-            "match": True,
+            "alerts": [{"id": "alert"}],
+            "dispute_count": 3,
         },
         "verifi": {
             "match": False,
-        },
-        "history": {
-            "dispute_count_across_merchants": 3,
         },
     }
 
@@ -85,6 +83,19 @@ def test_consortium_builder_detects_cross_merchant_risk() -> None:
     assert evidence["verifi_match"] is False
     assert evidence["cross_merchant_fraud_history"] is True
     assert evidence["dispute_count_across_merchants"] == 3
+
+
+def test_consortium_builder_preserves_top_level_history_without_raw_payload() -> None:
+    evidence = _build_consortium_evidence({
+        "ethoca": {"match": False, "provider_secret": "must-not-be-retained"},
+        "verifi": {"match": False},
+        "dispute_count_across_merchants": 3,
+        "cross_merchant_fraud_history": True,
+    })
+
+    assert evidence["dispute_count_across_merchants"] == 3
+    assert evidence["cross_merchant_fraud_history"] is True
+    assert "must-not-be-retained" not in str(evidence["raw"])
 
 
 def test_consortium_agent_records_empty_evidence_on_collection_failure(monkeypatch) -> None:
@@ -112,16 +123,12 @@ def test_consortium_agent_keeps_ethoca_match_when_verifi_fails(monkeypatch) -> N
             return {"alerts": [{"id": "alert_001"}], "dispute_count": 2}
 
     monkeypatch.delenv("CHARGEGUARD_USE_STUBS", raising=False)
-    monkeypatch.setattr(
-        consortium.EthocaClient,
-        "from_env",
-        classmethod(lambda cls: FakeEthocaClient()),
-    )
-    monkeypatch.setattr(
-        consortium.VerifiClient,
-        "from_env",
-        classmethod(lambda cls: (_ for _ in ()).throw(RuntimeError("Verifi unavailable"))),
-    )
+    def resolve(_merchant, provider):
+        if provider == "ethoca":
+            return FakeEthocaClient()
+        raise RuntimeError("Verifi unavailable")
+
+    monkeypatch.setattr(consortium.consortium_client_factory, "for_merchant", resolve)
 
     result = consortium_agent(_state())
 
@@ -130,7 +137,7 @@ def test_consortium_agent_keeps_ethoca_match_when_verifi_fails(monkeypatch) -> N
     assert result["consortium"]["ethoca_match"] is True
     assert result["consortium"]["verifi_match"] is False
     assert result["consortium"]["cross_merchant_fraud_history"] is True
-    assert result["consortium"]["raw"]["response"]["source_errors"] == {
+    assert result["consortium"]["raw"]["source_errors"] == {
         "verifi": "verifi_provider_unavailable"
     }
     assert "verifi_provider_unavailable" in result["degraded_reasons"]

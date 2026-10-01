@@ -83,6 +83,22 @@ def test_relational_ownership_and_identifier_conflicts(pg):
         pg.upsert_order(order("order_x", "missing_merchant", "pay_other"))
 
 
+def test_consortium_connector_lifecycle_persists_and_enforces_ownership(pg):
+    pg.create_merchant(merchant())
+    pg.create_merchant(merchant("merchant_b"))
+    now = datetime.now(timezone.utc)
+    connector = {"connector_id": "consortium_one", "merchant_id": "merchant_a", "provider": "ethoca",
+                 "status": "pending", "verified_at": None, "created_at": now, "updated_at": now,
+                 "last_error_code": None}
+    assert pg.create_consortium_connector(connector, audit_action="created")
+    verified = {**connector, "status": "verified", "verified_at": now}
+    assert pg.activate_consortium_connector(verified, audit_action="verified") is None
+    restarted = PostgresStore(pg.database_url, environment="test")
+    assert restarted.get_consortium_connector("merchant_a", "consortium_one")["status"] == "verified"
+    assert restarted.get_consortium_connector("merchant_b", "consortium_one") is None
+    assert restarted.get_merchant("merchant_a")["consortium_connector_ids"] == {"ethoca": "consortium_one"}
+
+
 def test_concurrent_order_updates_preserve_flags(pg):
     pg.create_merchant(merchant())
     pg.upsert_order(order())

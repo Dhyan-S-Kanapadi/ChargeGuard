@@ -20,6 +20,7 @@ from api.demo_bootstrap import seed_demo_merchant
 from api.public_demo import router as public_demo_router, validate_public_demo
 from api.disputes import router as disputes_router
 from api.device_risk_connectors import router as device_risk_connectors_router
+from api.consortium_connectors import router as consortium_connectors_router
 from api.merchants import router as merchants_router
 from api.orders import router as orders_router
 from api.payment_connectors import router as payment_connectors_router
@@ -125,6 +126,11 @@ async def validation_exception_handler(
             status_code=422,
             content={"detail": "invalid_shipping_connector_request"},
         )
+    if "/consortium-connectors" in request.url.path:
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "invalid_consortium_connector_request"},
+        )
     return await request_validation_exception_handler(request, exc)
 
 
@@ -135,6 +141,7 @@ app.include_router(merchants_router)
 app.include_router(orders_router)
 app.include_router(payment_connectors_router)
 app.include_router(shipping_connectors_router)
+app.include_router(consortium_connectors_router)
 app.include_router(device_risk_connectors_router)
 app.include_router(stats_router)
 app.include_router(assistant_router)

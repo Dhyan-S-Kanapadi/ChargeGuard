@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 from core.runtime import require_live_provider
+from integrations.connector_config import redact_provider_credentials
 
 
 class EthocaConfigError(RuntimeError):
@@ -12,6 +13,10 @@ class EthocaConfigError(RuntimeError):
 
 class EthocaRequestError(RuntimeError):
     """Raised when Ethoca returns an invalid or error response."""
+
+    def __init__(self, message: str = "Ethoca request failed.", *, status_code: int | None = None) -> None:
+        self.status_code = status_code
+        super().__init__(message)
 
 
 class EthocaClient:
@@ -61,11 +66,12 @@ class EthocaClient:
             json=json,
             headers={"Authorization": f"Bearer {self.api_key}"},
         )
-        if response.status_code >= 400:
-            raise EthocaRequestError(
-                f"Ethoca request failed with {response.status_code}: {response.text}"
-            )
-        parsed = response.json()
+        if not 200 <= response.status_code < 300:
+            raise EthocaRequestError(status_code=response.status_code)
+        try:
+            parsed = response.json()
+        except ValueError:
+            raise EthocaRequestError("Ethoca returned invalid JSON.") from None
         if not isinstance(parsed, dict):
             raise EthocaRequestError("Ethoca response was not an object.")
-        return parsed
+        return redact_provider_credentials(parsed, self.api_key)

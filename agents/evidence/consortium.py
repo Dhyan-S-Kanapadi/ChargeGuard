@@ -4,11 +4,12 @@ import os
 from typing import Any
 
 from core.state import ChargebackState, ConsortiumEvidence
-from integrations.ethoca import EthocaClient, EthocaConfigError
-from integrations.verifi import VerifiClient, VerifiConfigError
+from api.store import store
+from integrations.consortium_client_factory import ConsortiumClientFactory, ConsortiumConnectorError
 
 
 logger = logging.getLogger(__name__)
+consortium_client_factory = ConsortiumClientFactory(store)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -55,8 +56,11 @@ def _stub_consortium_response(state: ChargebackState) -> dict[str, Any]:
     }
 
 
-def _match_and_count(response: dict[str, Any]) -> tuple[bool, int]:
+def _normalize_provider_response(response: dict[str, Any]) -> dict[str, int | bool]:
+    """Keep only deterministic provider signals; never retain provider payloads."""
     data = response.get("data") if isinstance(response.get("data"), dict) else response
+    if not isinstance(data, dict):
+        return {"match": False, "dispute_count": 0}
     alerts = data.get("alerts") or data.get("matches") or []
     match = bool(
         data.get("match")
@@ -69,36 +73,41 @@ def _match_and_count(response: dict[str, Any]) -> tuple[bool, int]:
         or data.get("dispute_count")
         or data.get("alert_count")
     )
-    count = int(count_value) if count_value is not None else len(alerts)
-    return match, count
+    try:
+        count = max(0, int(count_value)) if count_value is not None else len(alerts)
+    except (TypeError, ValueError):
+        count = len(alerts)
+    return {"match": match, "dispute_count": count}
 
 
 def _build_consortium_evidence(response: dict[str, Any]) -> ConsortiumEvidence:
-    ethoca = response.get("ethoca") or {}
-    verifi = response.get("verifi") or {}
-    history = response.get("history") or {}
-    ethoca_match, ethoca_count = _match_and_count(ethoca)
-    verifi_match, verifi_count = _match_and_count(verifi)
-    dispute_count = int(
-        history.get("dispute_count_across_merchants")
-        or response.get("dispute_count_across_merchants")
-        or max(ethoca_count, verifi_count)
-        or 0
+    ethoca = _normalize_provider_response(response.get("ethoca") or {})
+    verifi = _normalize_provider_response(response.get("verifi") or {})
+    history = response.get("history") if isinstance(response.get("history"), dict) else {}
+    history_count = _normalize_provider_response(history)["dispute_count"]
+    top_level_count = _normalize_provider_response({
+        "dispute_count_across_merchants": response.get("dispute_count_across_merchants")
+    })["dispute_count"]
+    dispute_count = max(
+        int(ethoca["dispute_count"]), int(verifi["dispute_count"]),
+        int(history_count), int(top_level_count),
+    )
+    cross_merchant_history = bool(
+        history.get("cross_merchant_fraud_history")
+        or response.get("cross_merchant_fraud_history")
+        or dispute_count > 1
     )
 
     return {
         "lookup_complete": bool(response.get("lookup_complete", True)),
-        "ethoca_match": bool(ethoca_match or response.get("ethoca_match")),
-        "verifi_match": bool(verifi_match or response.get("verifi_match")),
-        "cross_merchant_fraud_history": bool(
-            history.get("cross_merchant_fraud_history")
-            or response.get("cross_merchant_fraud_history")
-            or dispute_count > 1
-        ),
+        "ethoca_match": bool(ethoca["match"] or response.get("ethoca_match")),
+        "verifi_match": bool(verifi["match"] or response.get("verifi_match")),
+        "cross_merchant_fraud_history": cross_merchant_history,
         "dispute_count_across_merchants": dispute_count,
         "raw": {
             "source": "ethoca_verifi",
-            "response": response,
+            "providers": {"ethoca": ethoca, "verifi": verifi},
+            "source_errors": response.get("source_errors", {}),
         },
     }
 
@@ -130,9 +139,9 @@ def _collect_consortium_data(state: ChargebackState) -> dict[str, Any]:
         completed += 1
     else:
         try:
-            ethoca = EthocaClient.from_env().search_alerts(identifiers)
+            ethoca = consortium_client_factory.for_merchant(state["merchant_profile"], "ethoca").search_alerts(identifiers)
             completed += 1
-        except EthocaConfigError:
+        except ConsortiumConnectorError:
             logger.warning("Ethoca credentials are unavailable")
             ethoca = {}
             errors["ethoca"] = "ethoca_credentials_missing"
@@ -148,9 +157,9 @@ def _collect_consortium_data(state: ChargebackState) -> dict[str, Any]:
         completed += 1
     else:
         try:
-            verifi = VerifiClient.from_env().search_alerts(identifiers)
+            verifi = consortium_client_factory.for_merchant(state["merchant_profile"], "verifi").search_alerts(identifiers)
             completed += 1
-        except VerifiConfigError:
+        except ConsortiumConnectorError:
             logger.warning("Verifi credentials are unavailable")
             verifi = {}
             errors["verifi"] = "verifi_credentials_missing"

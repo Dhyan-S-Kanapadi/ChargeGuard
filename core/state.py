@@ -15,6 +15,7 @@ class MerchantProfile(TypedDict):
     razorpay_account_id: NotRequired[str | None]
     shipping_provider: NotRequired[Literal["shiprocket", "delhivery"]]
     shipping_connector_ids: NotRequired[dict[str, str]]
+    consortium_connector_ids: NotRequired[dict[str, str]]
     support_connector_ref: NotRequired[str | None]
     freshdesk_domain: str
     gmail_user_id: NotRequired[str | None]
@@ -50,6 +51,17 @@ class ShippingConnector(TypedDict):
     provider: Literal["shiprocket", "delhivery"]
     status: Literal["pending", "verified", "invalid", "disconnected"]
     credential_hint: str
+    verified_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    last_error_code: str | None
+
+
+class ConsortiumConnector(TypedDict):
+    connector_id: str
+    merchant_id: str
+    provider: Literal["ethoca", "verifi"]
+    status: Literal["pending", "verified", "invalid", "disconnected"]
     verified_at: datetime | None
     created_at: datetime
     updated_at: datetime
