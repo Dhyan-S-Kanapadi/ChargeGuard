@@ -871,6 +871,13 @@ class InMemoryStore:
             ]
             return deepcopy(matches[0]) if len(matches) == 1 else None
 
+    def get_merchant_by_payment_connector_account(self, provider: str, account_id: str) -> MerchantProfile | None:
+        with self._lock:
+            matches = [connector["merchant_id"] for connector in self._payment_connectors.values()
+                       if connector["provider"] == provider and connector["provider_account_id"] == account_id
+                       and connector["status"] == "verified"]
+            return deepcopy(self._merchants[matches[0]]) if len(matches) == 1 else None
+
     def query_orders(
         self,
         *,

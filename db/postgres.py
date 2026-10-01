@@ -35,7 +35,7 @@ TABLES = {
 }
 # Explicit allowlist: a future local method needs a database-contract review.
 READS = frozenset({
-    "get_merchant", "get_merchant_by_razorpay_account_id", "list_merchants",
+    "get_merchant", "get_merchant_by_razorpay_account_id", "get_merchant_by_payment_connector_account", "list_merchants",
     "get_payment_connector", "list_payment_connectors", "list_payment_connector_audit",
     "get_shipping_connector", "list_shipping_connectors", "list_shipping_connector_audit",
     "get_device_risk_connector", "list_device_risk_connectors", "list_device_risk_connector_audit",
