@@ -20,3 +20,20 @@ def connector_env_value(
         if scoped:
             return scoped
     return values.get(name)
+
+
+def redact_provider_credentials(value, *credentials: str):
+    """Remove credential echoes before a provider response reaches evidence state."""
+    if isinstance(value, str):
+        for credential in credentials:
+            if credential:
+                value = value.replace(credential, "[REDACTED]")
+        return value
+    if isinstance(value, dict):
+        return {
+            redact_provider_credentials(key, *credentials): redact_provider_credentials(item, *credentials)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_provider_credentials(item, *credentials) for item in value]
+    return value

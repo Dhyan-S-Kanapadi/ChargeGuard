@@ -44,5 +44,17 @@ def test_ethoca_client_raises_for_error_response() -> None:
         ),
     )
 
-    with pytest.raises(EthocaRequestError):
+    with pytest.raises(EthocaRequestError) as error:
         client.search_alerts({"payment_id": "pay_123"})
+    assert error.value.status_code == 401
+
+
+def test_ethoca_client_redacts_credential_echoes() -> None:
+    client = EthocaClient(
+        api_key="key_123",
+        base_url="https://ethoca.test",
+        client=httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"echo": "key_123", "match": False})
+        )),
+    )
+    assert client.search_alerts({"payment_id": "pay_123"})["echo"] == "[REDACTED]"

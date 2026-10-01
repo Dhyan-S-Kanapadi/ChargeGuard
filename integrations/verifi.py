@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 from core.runtime import require_live_provider
+from integrations.connector_config import redact_provider_credentials
 
 
 class VerifiConfigError(RuntimeError):
@@ -12,6 +13,10 @@ class VerifiConfigError(RuntimeError):
 
 class VerifiRequestError(RuntimeError):
     """Raised when Verifi returns an invalid or error response."""
+
+    def __init__(self, message: str = "Verifi request failed.", *, status_code: int | None = None) -> None:
+        self.status_code = status_code
+        super().__init__(message)
 
 
 class VerifiClient:
@@ -61,11 +66,12 @@ class VerifiClient:
             json=json,
             headers={"Authorization": f"Bearer {self.api_key}"},
         )
-        if response.status_code >= 400:
-            raise VerifiRequestError(
-                f"Verifi request failed with {response.status_code}: {response.text}"
-            )
-        parsed = response.json()
+        if not 200 <= response.status_code < 300:
+            raise VerifiRequestError(status_code=response.status_code)
+        try:
+            parsed = response.json()
+        except ValueError:
+            raise VerifiRequestError("Verifi returned invalid JSON.") from None
         if not isinstance(parsed, dict):
             raise VerifiRequestError("Verifi response was not an object.")
-        return parsed
+        return redact_provider_credentials(parsed, self.api_key)
