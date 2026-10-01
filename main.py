@@ -30,6 +30,8 @@ from api.razorpay_admin import (
 )
 from api.razorpay_simulator import router as razorpay_simulator_router
 from api.razorpay_webhooks import router as razorpay_webhooks_router
+from api.stripe_webhooks import router as stripe_webhooks_router
+from api.stripe_admin import router as stripe_admin_router, schedule_startup_stripe_recovery
 from api.stats import router as stats_router
 from api.webhooks import router as webhooks_router
 from api.store import store
@@ -86,6 +88,7 @@ async def _lifespan(_: FastAPI):
     seed_demo_merchant()
     validate_public_demo()
     schedule_startup_razorpay_recovery()
+    schedule_startup_stripe_recovery()
     yield
 
 
@@ -138,6 +141,8 @@ app.include_router(assistant_router)
 app.include_router(public_demo_router)
 app.include_router(razorpay_admin_router)
 app.include_router(razorpay_webhooks_router)
+app.include_router(stripe_webhooks_router)
+app.include_router(stripe_admin_router)
 app.include_router(razorpay_simulator_router)
 
 

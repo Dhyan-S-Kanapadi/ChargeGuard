@@ -83,6 +83,7 @@ ADMIN_ROUTES = {
     ("POST", "/merchants"), ("GET", "/internal/runtime"),
     ("GET", "/internal/razorpay/events"), ("POST", "/internal/razorpay/events/{event_id}/retry"),
     ("POST", "/internal/razorpay/process-pending"), ("POST", "/internal/razorpay/reconcile"),
+    ("POST", "/internal/stripe/events/{event_id}/retry"), ("POST", "/internal/stripe/process-pending"), ("POST", "/internal/stripe/reconcile"),
     ("POST", "/auth/users/{user_id}"),
 }
 SELF_ROUTES = {("GET", "/auth/me"), ("POST", "/auth/session/revoke")}

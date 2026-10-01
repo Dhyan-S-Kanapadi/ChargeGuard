@@ -62,19 +62,33 @@ class StripeClient:
             raise StripeRequestError("Stripe verification response was malformed.")
         return account_id
 
-    def _get(self, path: str) -> dict[str, Any]:
+    def list_disputes(self, *, created_gte: int | None = None, created_lte: int | None = None, limit: int = 25) -> list[dict[str, Any]]:
+        limit = min(100, max(1, limit))
+        params: dict[str, Any] = {"limit": limit}
+        if created_gte is not None:
+            params["created[gte]"] = created_gte
+        if created_lte is not None:
+            params["created[lte]"] = created_lte
+        payload = self._get("/disputes", params=params)
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise StripeRequestError("Stripe disputes response was malformed.")
+        return [item for item in data if isinstance(item, dict)][:limit]
+
+    def _get(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         if self._client is not None:
-            return self._send_get(self._client, path)
+            return self._send_get(self._client, path, params=params)
 
         with httpx.Client(timeout=self.timeout) as client:
-            return self._send_get(client, path)
+            return self._send_get(client, path, params=params)
 
-    def _send_get(self, client: httpx.Client, path: str) -> dict[str, Any]:
+    def _send_get(self, client: httpx.Client, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         response = client.get(
             f"{self.base_url}{path}",
             headers={
                 "Authorization": f"Bearer {self.api_key}",
             },
+            params=params,
         )
         if response.status_code >= 400:
             raise StripeRequestError(
