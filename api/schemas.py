@@ -542,3 +542,11 @@ class OutcomeResponse(BaseModel):
     final_outcome: Literal["WIN", "LOSS"]
     outcome_reason: str
     outcome_recorded_at: datetime
+
+
+class SupportConnectorLifecycle(BaseModel):
+    merchant_id: str = Field(min_length=1, max_length=100)
+    provider: Literal["gmail", "freshdesk"]
+    status: Literal["verified", "invalid", "disconnected"]
+    connector_id: str | None = None
+    last_error_code: str | None = None
