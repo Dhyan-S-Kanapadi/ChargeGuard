@@ -54,11 +54,16 @@ def verify_token(token):
 
 # Route templates, not path prefixes. New routes are denied until explicitly reviewed.
 READ_ROUTES = {
+    "/merchants/{merchant_id}/support-connectors",
     "/disputes", "/disputes/{chargeback_id}", "/disputes/{chargeback_id}/summary",
     "/merchants", "/merchants/{merchant_id}", "/stats", "/assistant/status",
     "/merchants/{merchant_id}/payment-connectors", "/merchants/{merchant_id}/shipping-connectors", "/merchants/{merchant_id}/device-risk-connectors",
 }
 OWNER_WRITES = {
+    ("POST", "/merchants/{merchant_id}/support-connectors/gmail"),
+    ("POST", "/merchants/{merchant_id}/support-connectors/freshdesk"),
+    ("POST", "/merchants/{merchant_id}/support-connectors/{connector_id}/verify"),
+    ("DELETE", "/merchants/{merchant_id}/support-connectors/{connector_id}"),
     ("PATCH", "/merchants/{merchant_id}"), ("POST", "/merchants/{merchant_id}/sync-shopify-history"),
     ("POST", "/orders/ingest"), ("POST", "/webhook/chargeback"),
     ("POST", "/merchants/{merchant_id}/payment-connectors/razorpay"),

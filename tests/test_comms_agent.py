@@ -187,21 +187,11 @@ def test_comms_collection_uses_merchant_support_connector(monkeypatch) -> None:
     calls: dict[str, dict] = {}
 
     class FakeGmailReader:
-        @classmethod
-        def from_env(cls, **kwargs):
-            calls["gmail"] = kwargs
-            return cls()
-
         def search_messages(self, query):
             calls["gmail_query"] = {"query": query}
             return []
 
     class FakeFreshdeskClient:
-        @classmethod
-        def from_env(cls, **kwargs):
-            calls["freshdesk"] = kwargs
-            return cls()
-
         def search_tickets(self, *, email):
             calls["freshdesk_query"] = {"email": email}
             return [
@@ -210,19 +200,15 @@ def test_comms_collection_uses_merchant_support_connector(monkeypatch) -> None:
                 {"id": 3, "subject": "Question about order_rzp_do_not_search"},
             ]
 
-    monkeypatch.setattr(comms, "GmailReader", FakeGmailReader)
-    monkeypatch.setattr(comms, "FreshdeskClient", FakeFreshdeskClient)
+    def resolve(merchant, provider):
+        calls[provider] = merchant
+        return FakeGmailReader() if provider == "gmail" else FakeFreshdeskClient()
 
+    monkeypatch.setattr(comms.support_client_factory, "for_merchant", resolve)
     assert comms._collect_gmail(state) == []
     assert [ticket["id"] for ticket in comms._collect_freshdesk(state)] == [1, 2]
-    assert calls["gmail"] == {
-        "connector_ref": "ACME",
-        "user_id": "support@acme.example",
-    }
-    assert calls["freshdesk"] == {
-        "connector_ref": "ACME",
-        "domain": "demo.freshdesk.com",
-    }
+    assert calls["gmail"] == state["merchant_profile"]
+    assert calls["freshdesk"] == state["merchant_profile"]
     assert "#1001" in calls["gmail_query"]["query"]
     assert "shopify_1001" in calls["gmail_query"]["query"]
     assert "order_rzp_do_not_search" not in calls["gmail_query"]["query"]

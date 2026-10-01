@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 from core.runtime import require_live_provider
 
-from integrations.connector_config import connector_env_value
+from integrations.connector_config import connector_env_value, redact_credential_echoes
 
 
 GMAIL_BASE_URL = "https://gmail.googleapis.com/gmail/v1"
@@ -17,6 +17,10 @@ class GmailConfigError(RuntimeError):
 
 class GmailRequestError(RuntimeError):
     """Raised when Gmail returns an invalid or error response."""
+
+    def __init__(self, message: str = "Provider request failed.", *, status_code: int | None = None):
+        self.status_code = status_code
+        super().__init__(message)
 
 
 class GmailReader:
@@ -63,6 +67,12 @@ class GmailReader:
             user_id=user_id or configured_user_id or "me",
         )
 
+    def verify_credentials(self) -> None:
+        response = self._get("/users/me/messages", params={"maxResults": 1})
+        messages = response.get("messages", [])
+        if not isinstance(messages, list) or any(not isinstance(m, dict) or not m.get("id") for m in messages):
+            raise GmailRequestError("Invalid Gmail verification response.")
+
     def search_messages(self, query: str, *, max_results: int = 50) -> list[dict[str, Any]]:
         response = self._get(
             f"/users/{self.user_id}/messages",
@@ -97,11 +107,14 @@ class GmailReader:
             params=params,
             headers={"Authorization": f"Bearer {self.access_token}"},
         )
-        if response.status_code >= 400:
+        if not 200 <= response.status_code < 300:
             raise GmailRequestError(
-                f"Gmail request failed with {response.status_code}: {response.text}"
+                "Gmail request failed.", status_code=response.status_code
             )
-        parsed = response.json()
+        try:
+            parsed = response.json()
+        except ValueError:
+            raise GmailRequestError("Invalid Gmail response.") from None
         if not isinstance(parsed, dict):
             raise GmailRequestError("Gmail response was not an object.")
-        return parsed
+        return redact_credential_echoes(parsed, self.access_token)

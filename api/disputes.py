@@ -85,6 +85,13 @@ def _redact_state(state: dict[str, Any]) -> dict[str, Any]:
         if isinstance(evidence, dict):
             evidence.pop("raw", None)
 
+    comms = redacted.get("comms")
+    if isinstance(comms, dict):
+        # Exclude arbitrary nested bodies, headers, attachments and custom fields.
+        redacted["comms"] = {key: comms[key] for key in (
+            "post_delivery_interaction", "complaint_raised_before_chargeback"
+        ) if key in comms}
+
     transaction = redacted.get("transaction")
     if isinstance(transaction, dict):
         for key in _TRANSACTION_PII_KEYS:

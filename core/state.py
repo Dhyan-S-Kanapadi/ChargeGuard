@@ -56,6 +56,17 @@ class ShippingConnector(TypedDict):
     last_error_code: str | None
 
 
+class SupportConnector(TypedDict):
+    connector_id: str
+    merchant_id: str
+    provider: Literal["gmail", "freshdesk"]
+    status: Literal["verified", "invalid", "disconnected"]
+    verified_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    last_error_code: str | None
+
+
 class DeviceRiskConnector(TypedDict):
     connector_id: str
     merchant_id: str

@@ -6,11 +6,14 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 
 from core.state import ChargebackState, CommsEvidence
-from integrations.freshdesk import FreshdeskClient, FreshdeskConfigError
-from integrations.gmail_reader import GmailConfigError, GmailReader
+from integrations.freshdesk import FreshdeskConfigError
+from integrations.gmail_reader import GmailConfigError
+from integrations.support_client_factory import SupportClientFactory
+from api.store import store
 
 
 logger = logging.getLogger(__name__)
+support_client_factory = SupportClientFactory(store)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -58,7 +61,7 @@ def _parse_datetime(value: Any) -> datetime | None:
         try:
             parsed = parsedate_to_datetime(str(value))
         except (TypeError, ValueError):
-            logger.warning("Unable to parse communication timestamp %r", value)
+            logger.warning("Unable to parse communication timestamp")
             return None
     return parsed.replace(tzinfo=parsed.tzinfo or timezone.utc)
 
@@ -128,10 +131,7 @@ def _collect_gmail(state: ChargebackState) -> list[dict[str, Any]]:
     if customer_email:
         query = f'{query} (from:{customer_email} OR to:{customer_email})'
     merchant = state["merchant_profile"]
-    messages = GmailReader.from_env(
-        connector_ref=merchant.get("support_connector_ref"),
-        user_id=merchant.get("gmail_user_id"),
-    ).search_messages(query)
+    messages = support_client_factory.for_merchant(merchant, "gmail").search_messages(query)
     return [_normalize_gmail_message(message, customer_email) for message in messages]
 
 
@@ -143,10 +143,7 @@ def _collect_freshdesk(state: ChargebackState) -> list[dict[str, Any]]:
     if not references:
         raise ValueError("Freshdesk collection requires a commerce order reference")
     merchant = state["merchant_profile"]
-    tickets = FreshdeskClient.from_env(
-        connector_ref=merchant.get("support_connector_ref"),
-        domain=merchant.get("freshdesk_domain") or None,
-    ).search_tickets(email=customer_email)
+    tickets = support_client_factory.for_merchant(merchant, "freshdesk").search_tickets(email=customer_email)
     return [
         ticket
         for ticket in tickets

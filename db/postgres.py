@@ -27,14 +27,16 @@ class StoreConflictError(ValueError):
 
 TABLES = {
     "merchants": ("merchant_id",), "payment_connectors": ("connector_id",),
-    "shipping_connectors": ("connector_id",),
+    "shipping_connectors": ("connector_id",), "support_connectors": ("connector_id",),
     "device_risk_connectors": ("connector_id",), "orders": ("merchant_id", "order_id"),
     "disputes": ("chargeback_id",), "provider_events": ("event_id",),
     "simulator_disputes": ("dispute_id",),
-    "payment_connector_audit": (), "shipping_connector_audit": (), "device_risk_connector_audit": (),
+    "payment_connector_audit": (), "shipping_connector_audit": (), "support_connector_audit": (),
+    "device_risk_connector_audit": (),
 }
 # Explicit allowlist: a future local method needs a database-contract review.
 READS = frozenset({
+    "get_support_connector", "list_support_connectors", "list_support_connector_audit",
     "get_merchant", "get_merchant_by_razorpay_account_id", "list_merchants",
     "get_payment_connector", "list_payment_connectors", "list_payment_connector_audit",
     "get_shipping_connector", "list_shipping_connectors", "list_shipping_connector_audit",
@@ -45,6 +47,7 @@ READS = frozenset({
     "list_recoverable_provider_events", "get_simulator_dispute", "list_simulator_disputes",
 })
 WRITES = frozenset({
+    "save_support_connector",
     "create_merchant", "update_merchant", "create_payment_connector", "activate_payment_connector",
     "update_payment_connector_status", "disconnect_payment_connector", "configure_device_risk_connector",
     "create_shipping_connector", "activate_shipping_connector", "update_shipping_connector_status",

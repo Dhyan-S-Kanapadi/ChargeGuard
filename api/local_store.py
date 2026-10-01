@@ -15,6 +15,7 @@ from core.state import (
     OrderRecord,
     PaymentConnector,
     ShippingConnector,
+    SupportConnector,
 )
 
 
@@ -85,6 +86,8 @@ class InMemoryStore:
         self._payment_connector_audit: list[dict[str, Any]] = []
         self._shipping_connectors: dict[str, ShippingConnector] = {}
         self._shipping_connector_audit: list[dict[str, Any]] = []
+        self._support_connectors: dict[str, SupportConnector] = {}
+        self._support_connector_audit: list[dict[str, Any]] = []
         self._device_risk_connectors: dict[str, DeviceRiskConnector] = {}
         self._device_risk_connector_audit: list[dict[str, Any]] = []
         self._orders: dict[str, OrderRecord] = {}
@@ -104,6 +107,8 @@ class InMemoryStore:
             self._payment_connector_audit.clear()
             self._shipping_connectors.clear()
             self._shipping_connector_audit.clear()
+            self._support_connectors.clear()
+            self._support_connector_audit.clear()
             self._device_risk_connectors.clear()
             self._device_risk_connector_audit.clear()
             self._orders.clear()
@@ -521,6 +526,77 @@ class InMemoryStore:
 
     def _append_shipping_connector_audit(self, connector: ShippingConnector, action: str) -> None:
         self._shipping_connector_audit.append({
+            "connector_id": connector["connector_id"], "merchant_id": connector["merchant_id"],
+            "provider": connector["provider"], "action": action,
+            "created_at": datetime.now(timezone.utc), "status": connector["status"],
+            "error_code": connector["last_error_code"],
+        })
+
+    def get_support_connector(self, merchant_id: str, connector_id: str) -> SupportConnector | None:
+        with self._lock:
+            connector = self._support_connectors.get(connector_id)
+            if connector is None or connector["merchant_id"] != merchant_id:
+                return None
+            return deepcopy(connector)
+
+    def list_support_connectors(self, merchant_id: str) -> list[SupportConnector]:
+        with self._lock:
+            return sorted(
+                [deepcopy(connector) for connector in self._support_connectors.values()
+                 if connector["merchant_id"] == merchant_id],
+                key=lambda connector: connector["created_at"], reverse=True,
+            )
+
+    def list_support_connector_audit(self, merchant_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            return [deepcopy(item) for item in self._support_connector_audit
+                    if item["merchant_id"] == merchant_id]
+
+    def save_support_connector(
+        self, connector: SupportConnector, *, audit_action: str,
+        expected_updated_at: datetime | None = None,
+    ) -> str | None:
+        """Commit metadata, rotation and audit together; reject stale provider results."""
+        with self._lock:
+            if connector["merchant_id"] not in self._merchants:
+                raise ValueError("support_connector_merchant_missing")
+            current = self._support_connectors.get(connector["connector_id"])
+            if (current is None and expected_updated_at is not None) or (current is not None and (
+                current["merchant_id"] != connector["merchant_id"]
+                or current["provider"] != connector["provider"]
+                or current["updated_at"] != expected_updated_at
+                or (current["status"] == "disconnected" and connector["status"] != "disconnected")
+            )):
+                raise ValueError("support_connector_changed")
+            if connector["provider"] not in {"gmail", "freshdesk"} or connector["status"] not in {"verified", "invalid", "disconnected"}:
+                raise ValueError("support_connector_invalid")
+            if connector["status"] == "verified" and connector["verified_at"] is None:
+                raise ValueError("support_connector_not_verified")
+            before = deepcopy(self._support_connectors)
+            audit_before = deepcopy(self._support_connector_audit)
+            previous_id = None
+            try:
+                if connector["status"] == "verified":
+                    for previous in self._support_connectors.values():
+                        if (previous["merchant_id"] == connector["merchant_id"]
+                            and previous["provider"] == connector["provider"]
+                            and previous["connector_id"] != connector["connector_id"]
+                            and previous["status"] == "verified"):
+                            previous_id = previous["connector_id"]
+                            previous["status"] = "disconnected"
+                            previous["updated_at"] = connector["updated_at"]
+                            self._append_support_connector_audit(previous, "rotated_out")
+                self._support_connectors[connector["connector_id"]] = deepcopy(connector)
+                self._append_support_connector_audit(connector, "rotated" if previous_id else audit_action)
+                self._save()
+            except Exception:
+                self._support_connectors = before
+                self._support_connector_audit = audit_before
+                raise
+            return previous_id
+
+    def _append_support_connector_audit(self, connector: SupportConnector, action: str) -> None:
+        self._support_connector_audit.append({
             "connector_id": connector["connector_id"], "merchant_id": connector["merchant_id"],
             "provider": connector["provider"], "action": action,
             "created_at": datetime.now(timezone.utc), "status": connector["status"],
@@ -1376,6 +1452,8 @@ class InMemoryStore:
         payment_connector_audit = payload.get("payment_connector_audit", [])
         shipping_connectors = payload.get("shipping_connectors", {})
         shipping_connector_audit = payload.get("shipping_connector_audit", [])
+        support_connectors = payload.get("support_connectors", {})
+        support_connector_audit = payload.get("support_connector_audit", [])
         device_risk_connectors = payload.get("device_risk_connectors", {})
         device_risk_connector_audit = payload.get("device_risk_connector_audit", [])
         orders = payload.get("orders", {})
@@ -1386,6 +1464,8 @@ class InMemoryStore:
             or not isinstance(payment_connector_audit, list)
             or not isinstance(shipping_connectors, dict)
             or not isinstance(shipping_connector_audit, list)
+            or not isinstance(support_connectors, dict)
+            or not isinstance(support_connector_audit, list)
             or not isinstance(device_risk_connectors, dict)
             or not isinstance(device_risk_connector_audit, list)
             or not isinstance(orders, dict)
@@ -1409,6 +1489,8 @@ class InMemoryStore:
         self._payment_connector_audit = deepcopy(payment_connector_audit)
         self._shipping_connectors = deepcopy(shipping_connectors)
         self._shipping_connector_audit = deepcopy(shipping_connector_audit)
+        self._support_connectors = deepcopy(support_connectors)
+        self._support_connector_audit = deepcopy(support_connector_audit)
         self._device_risk_connectors = deepcopy(device_risk_connectors)
         self._device_risk_connector_audit = deepcopy(device_risk_connector_audit)
         self._disputes = deepcopy(disputes)
@@ -1451,6 +1533,8 @@ class InMemoryStore:
             "payment_connector_audit": self._payment_connector_audit,
             "shipping_connectors": self._shipping_connectors,
             "shipping_connector_audit": self._shipping_connector_audit,
+            "support_connectors": self._support_connectors,
+            "support_connector_audit": self._support_connector_audit,
             "device_risk_connectors": self._device_risk_connectors,
             "device_risk_connector_audit": self._device_risk_connector_audit,
             "orders": self._orders,
