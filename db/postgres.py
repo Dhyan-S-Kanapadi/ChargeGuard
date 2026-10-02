@@ -27,18 +27,20 @@ class StoreConflictError(ValueError):
 
 TABLES = {
     "merchants": ("merchant_id",), "payment_connectors": ("connector_id",),
-    "shipping_connectors": ("connector_id",),
+    "shipping_connectors": ("connector_id",), "support_connectors": ("connector_id",),
     "consortium_connectors": ("connector_id",),
     "device_risk_connectors": ("connector_id",), "orders": ("merchant_id", "order_id"),
     "disputes": ("chargeback_id",), "provider_events": ("event_id",),
     "simulator_disputes": ("dispute_id",),
-    "payment_connector_audit": (), "shipping_connector_audit": (), "consortium_connector_audit": (), "device_risk_connector_audit": (),
+    "payment_connector_audit": (), "shipping_connector_audit": (), "support_connector_audit": (),
+    "consortium_connector_audit": (), "device_risk_connector_audit": (),
 }
 # Explicit allowlist: a future local method needs a database-contract review.
 READS = frozenset({
     "get_merchant", "get_merchant_by_razorpay_account_id", "get_merchant_by_payment_connector_account", "list_merchants",
     "get_payment_connector", "list_payment_connectors", "list_payment_connector_audit",
     "get_shipping_connector", "list_shipping_connectors", "list_shipping_connector_audit",
+    "get_support_connector", "list_support_connectors", "list_support_connector_audit",
     "get_consortium_connector", "list_consortium_connectors", "list_consortium_connector_audit",
     "get_device_risk_connector", "list_device_risk_connectors", "list_device_risk_connector_audit",
     "get_order", "get_order_by_provider_payment_id", "get_order_by_provider_order_id",
@@ -51,6 +53,7 @@ WRITES = frozenset({
     "update_payment_connector_status", "disconnect_payment_connector", "configure_device_risk_connector",
     "create_shipping_connector", "activate_shipping_connector", "update_shipping_connector_status",
     "disconnect_shipping_connector",
+    "save_support_connector",
     "create_consortium_connector", "activate_consortium_connector", "update_consortium_connector_status",
     "disconnect_consortium_connector",
     "activate_device_risk_connector", "update_device_risk_connector_status", "disconnect_device_risk_connector",

@@ -1,11 +1,12 @@
 import os
+import base64
 from collections.abc import Mapping
 from typing import Any
 
 import httpx
 from core.runtime import require_live_provider
 
-from integrations.connector_config import connector_env_value
+from integrations.connector_config import connector_env_value, redact_credential_echoes
 
 
 class FreshdeskConfigError(RuntimeError):
@@ -14,6 +15,10 @@ class FreshdeskConfigError(RuntimeError):
 
 class FreshdeskRequestError(RuntimeError):
     """Raised when Freshdesk returns an error response."""
+
+    def __init__(self, message: str = "Provider request failed.", *, status_code: int | None = None):
+        self.status_code = status_code
+        super().__init__(message)
 
 
 class FreshdeskClient:
@@ -57,6 +62,11 @@ class FreshdeskClient:
 
         return cls(api_key=api_key, domain=domain)
 
+    def verify_credentials(self) -> None:
+        response = self._get("/tickets", params={"per_page": 1})
+        if not isinstance(response, list) or any(not isinstance(t, dict) or not t.get("id") for t in response):
+            raise FreshdeskRequestError("Invalid Freshdesk verification response.")
+
     def search_tickets(self, *, email: str) -> list[dict[str, Any]]:
         response = self._get("/tickets", params={"email": email})
         if not isinstance(response, list):
@@ -82,8 +92,13 @@ class FreshdeskClient:
             params=params,
             auth=(self.api_key, "X"),
         )
-        if response.status_code >= 400:
+        if not 200 <= response.status_code < 300:
             raise FreshdeskRequestError(
-                f"Freshdesk request failed with {response.status_code}: {response.text}"
+                "Freshdesk request failed.", status_code=response.status_code
             )
-        return response.json()
+        try:
+            parsed = response.json()
+        except ValueError:
+            raise FreshdeskRequestError("Invalid Freshdesk response.") from None
+        basic_token = base64.b64encode(f"{self.api_key}:X".encode()).decode()
+        return redact_credential_echoes(parsed, self.api_key, basic_token)

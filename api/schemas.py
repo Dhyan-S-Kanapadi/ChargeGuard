@@ -208,6 +208,43 @@ class ShippingConnectorResponse(BaseModel):
     last_error_code: str | None = None
 
 
+class GmailConnectorCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    access_token: SecretStr = Field(min_length=8, max_length=8192)
+
+    @field_validator("access_token")
+    @classmethod
+    def validate_token(cls, value: SecretStr) -> SecretStr:
+        if any(character.isspace() or not character.isascii() or ord(character) < 33
+               for character in value.get_secret_value()):
+            raise ValueError("Invalid credential format.")
+        return value
+
+
+class FreshdeskConnectorCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    api_key: SecretStr = Field(min_length=8, max_length=500)
+    domain: str = Field(
+        max_length=253,
+        pattern=r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.freshdesk\.com$",
+    )
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_key(cls, value: SecretStr) -> SecretStr:
+        return GmailConnectorCreate.validate_token(value)
+
+
+class SupportConnectorResponse(BaseModel):
+    connector_id: str
+    merchant_id: str
+    provider: Literal["gmail", "freshdesk"]
+    status: Literal["verified", "invalid", "disconnected"]
+    verified_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    last_error_code: str | None
+
 class _ConsortiumConnectorCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 

@@ -37,3 +37,7 @@ def redact_provider_credentials(value, *credentials: str):
     if isinstance(value, list):
         return [redact_provider_credentials(item, *credentials) for item in value]
     return value
+
+
+def redact_credential_echoes(value, *secrets: str):
+    return redact_provider_credentials(value, *secrets)

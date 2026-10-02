@@ -244,3 +244,23 @@ def test_event_owner_can_resolve_once_but_cannot_move(pg):
     with pytest.raises(StoreConflictError):
         pg.update_provider_event("event_owner", merchant_id="merchant_b")
     assert pg.get_provider_event("event_owner")["merchant_id"] == "merchant_a"
+
+
+def test_support_connector_lifecycle_persists_and_enforces_ownership(pg):
+    pg.create_merchant(merchant())
+    pg.create_merchant(merchant("merchant_b"))
+    now = datetime.now(timezone.utc)
+    connector = {"connector_id": "support_one", "merchant_id": "merchant_a", "provider": "gmail",
+                 "status": "verified", "verified_at": now, "created_at": now, "updated_at": now,
+                 "last_error_code": None}
+    assert pg.save_support_connector(connector, audit_action="verified") is None
+    restarted = PostgresStore(pg.database_url, environment="test")
+    assert restarted.get_support_connector("merchant_a", "support_one") == connector
+    assert restarted.get_support_connector("merchant_b", "support_one") is None
+    replacement = {**connector, "connector_id": "support_two"}
+    assert pg.save_support_connector(replacement, audit_action="verified") == "support_one"
+    assert pg.get_support_connector("merchant_a", "support_one")["status"] == "disconnected"
+    assert [c["connector_id"] for c in pg.list_support_connectors("merchant_a") if c["status"] == "verified"] == ["support_two"]
+    assert {a["action"] for a in pg.list_support_connector_audit("merchant_a")} == {"verified", "rotated", "rotated_out"}
+    with pytest.raises(ValueError, match="support_connector_changed"):
+        pg.save_support_connector({**replacement, "merchant_id": "merchant_b"}, audit_action="verified", expected_updated_at=now)

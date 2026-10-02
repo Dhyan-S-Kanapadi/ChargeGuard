@@ -240,7 +240,7 @@ Current provider ownership:
 
 On provider failure, an evidence agent must not fabricate maximally suspicious evidence. It should use neutral missing evidence, mark degradation, append a clear reason, and allow scoring to escalate.
 
-Merchant-specific support credentials are selected by a non-secret `support_connector_ref`. Secrets stay in environment variables such as `CHARGEGUARD_CONNECTOR_ACME_FRESHDESK_API_KEY`; they must not be stored in merchant API payloads.
+Live communications evidence resolves only the merchant's current verified Gmail or Freshdesk connector. Credentials use `CredentialSecretStore`; metadata and audits contain no secrets. Legacy `support_connector_ref` and global environment credentials are not used by managed communications retrieval. See [SUPPORT_CONNECTORS.md](SUPPORT_CONNECTORS.md) for the lifecycle, endpoints and local HTTP mock walkthrough.
 
 Live Razorpay and Stripe calls use merchant-scoped payment connectors. `MerchantProfile` contains only connector references; non-secret connector metadata and audit events live in the synchronized JSON store, while credential dictionaries live in a separate Fernet-encrypted file. The resolver always checks merchant ownership and verified status before decrypting. Credentials must never enter `ChargebackState`, dispute records, provider events, logs, or API responses. `ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK` defaults to `false`; when explicitly enabled for local compatibility it applies only when a merchant has no connector reference, never when a configured connector is broken.
 
@@ -387,7 +387,7 @@ Current configuration groups are:
 | ML/feedback | model, outcome, metadata, playbook-stat paths, retraining threshold, and synthetic-data decay |
 | Decision economics | response costs, FX rates, and `FIGHT_EV_THRESHOLD` |
 | Evidence providers | Stripe, Shiprocket, Delhivery, Freshdesk, Gmail, SEON, Ethoca, Verifi, and food-platform settings |
-| Merchant support connectors | `CHARGEGUARD_CONNECTOR_<REF>_<SETTING>` variables selected by `support_connector_ref` |
+| Merchant support connectors | Managed Gmail/Freshdesk credentials use the existing encrypted credential store; legacy scoped environment variables are not used by communications evidence. |
 | Optional LLMs | Anthropic credential, model names, feature enablement, and per-feature stub controls |
 | Monitoring | Visa, Mastercard, RuPay, and AMEX dispute-ratio thresholds |
 

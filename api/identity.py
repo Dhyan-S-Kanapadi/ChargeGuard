@@ -56,7 +56,7 @@ def verify_token(token):
 READ_ROUTES = {
     "/disputes", "/disputes/{chargeback_id}", "/disputes/{chargeback_id}/summary",
     "/merchants", "/merchants/{merchant_id}", "/stats", "/assistant/status",
-    "/merchants/{merchant_id}/payment-connectors", "/merchants/{merchant_id}/shipping-connectors", "/merchants/{merchant_id}/consortium-connectors", "/merchants/{merchant_id}/device-risk-connectors",
+    "/merchants/{merchant_id}/payment-connectors", "/merchants/{merchant_id}/shipping-connectors", "/merchants/{merchant_id}/support-connectors", "/merchants/{merchant_id}/consortium-connectors", "/merchants/{merchant_id}/device-risk-connectors",
 }
 OWNER_WRITES = {
     ("PATCH", "/merchants/{merchant_id}"), ("POST", "/merchants/{merchant_id}/sync-shopify-history"),
@@ -69,6 +69,10 @@ OWNER_WRITES = {
     ("POST", "/merchants/{merchant_id}/shipping-connectors/delhivery"),
     ("POST", "/merchants/{merchant_id}/shipping-connectors/{connector_id}/verify"),
     ("DELETE", "/merchants/{merchant_id}/shipping-connectors/{connector_id}"),
+    ("POST", "/merchants/{merchant_id}/support-connectors/gmail"),
+    ("POST", "/merchants/{merchant_id}/support-connectors/freshdesk"),
+    ("POST", "/merchants/{merchant_id}/support-connectors/{connector_id}/verify"),
+    ("DELETE", "/merchants/{merchant_id}/support-connectors/{connector_id}"),
     ("POST", "/merchants/{merchant_id}/consortium-connectors/ethoca"),
     ("POST", "/merchants/{merchant_id}/consortium-connectors/verifi"),
     ("POST", "/merchants/{merchant_id}/consortium-connectors/{connector_id}/verify"),

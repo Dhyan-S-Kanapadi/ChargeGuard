@@ -270,3 +270,27 @@ def test_public_auth_config_cannot_publish_service_secret(monkeypatch):
     response = TestClient(main.app).get("/auth/config")
     assert response.status_code == 503
     assert "sb_secret_do_not_leak" not in response.text
+
+
+def test_support_connector_tenant_and_role_boundary(tenant_api, monkeypatch, tmp_path):
+    from cryptography.fernet import Fernet
+    from api import support_connectors
+    client, pg, issue = tenant_api
+    monkeypatch.setattr(support_connectors, "verify_support_credentials", lambda *_: None)
+    # Authorization must reject foreign owners and non-owners before reading secrets.
+    for name, merchant_id in (("owner_b", "merchant_a"), ("reader", "merchant_a"), ("reviewer", "merchant_a")):
+        for provider, payload in (("gmail", {"access_token": "synthetic-token"}),
+                                  ("freshdesk", {"api_key": "synthetic-api-key", "domain": "demo.freshdesk.com"})):
+            assert client.post(f"/merchants/{merchant_id}/support-connectors/{provider}",
+                               headers=headers(issue, name), json=payload).status_code == 404
+    assert client.get("/merchants/merchant_b/support-connectors", headers=headers(issue)).status_code == 404
+    assert client.get("/merchants/merchant_a/support-connectors", headers=headers(issue, "reader")).json() == []
+    assert pg.list_support_connectors("merchant_a") == []
+    monkeypatch.setenv("CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("CHARGEGUARD_CREDENTIAL_STORE_PATH", str(tmp_path / "support-secrets.json"))
+    connected = client.post("/merchants/merchant_a/support-connectors/gmail",
+                            headers=headers(issue), json={"access_token": "synthetic-token"})
+    assert connected.status_code == 201
+    path = "/merchants/merchant_a/support-connectors/" + connected.json()["connector_id"]
+    assert client.post(path + "/verify", headers=headers(issue)).status_code == 200
+    assert client.delete(path, headers=headers(issue)).status_code == 200
