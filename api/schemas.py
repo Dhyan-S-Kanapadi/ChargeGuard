@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import re
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
@@ -86,6 +87,7 @@ class MerchantResponse(BaseModel):
     razorpay_account_id: str | None = None
     shipping_provider: str | None = None
     shipping_connector_ids: dict[str, str] = Field(default_factory=dict)
+    consortium_connector_ids: dict[str, str] = Field(default_factory=dict)
     support_connector_ref: str | None = None
     freshdesk_domain: str
     gmail_user_id: str | None = None
@@ -242,6 +244,69 @@ class SupportConnectorResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     last_error_code: str | None
+
+class _ConsortiumConnectorCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    api_key: SecretStr = Field(min_length=8, max_length=500)
+    base_url: str = Field(min_length=12, max_length=2048)
+    verification_payment_id: str = Field(min_length=3, max_length=200)
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_api_key(cls, value: SecretStr) -> SecretStr:
+        secret = value.get_secret_value()
+        if any(character.isspace() or not character.isascii() or ord(character) < 33 for character in secret):
+            raise ValueError("Invalid credential format.")
+        return value
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if (parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password
+                or parsed.port or parsed.path not in {"", "/"} or parsed.query or parsed.fragment
+                or "." not in parsed.hostname):
+            raise ValueError("Provider URL must be an HTTPS origin.")
+        return value.rstrip("/")
+
+    @field_validator("verification_payment_id")
+    @classmethod
+    def validate_payment_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any(character.isspace() for character in normalized):
+            raise ValueError("Invalid verification payment identifier.")
+        return normalized
+
+
+class EthocaConnectorCreate(_ConsortiumConnectorCreate):
+    pass
+
+
+class VerifiConnectorCreate(_ConsortiumConnectorCreate):
+    pass
+
+
+class ConsortiumConnectorVerify(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    verification_payment_id: str = Field(min_length=3, max_length=200)
+
+    @field_validator("verification_payment_id")
+    @classmethod
+    def validate_payment_id(cls, value: str) -> str:
+        return _ConsortiumConnectorCreate.validate_payment_id(value)
+
+
+class ConsortiumConnectorResponse(BaseModel):
+    connector_id: str
+    merchant_id: str
+    provider: Literal["ethoca", "verifi"]
+    status: Literal["pending", "verified", "invalid", "disconnected"]
+    verified_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    last_error_code: str | None = None
 
 
 class SeonConnectorCreate(BaseModel):
@@ -542,11 +607,3 @@ class OutcomeResponse(BaseModel):
     final_outcome: Literal["WIN", "LOSS"]
     outcome_reason: str
     outcome_recorded_at: datetime
-
-
-class SupportConnectorLifecycle(BaseModel):
-    merchant_id: str = Field(min_length=1, max_length=100)
-    provider: Literal["gmail", "freshdesk"]
-    status: Literal["verified", "invalid", "disconnected"]
-    connector_id: str | None = None
-    last_error_code: str | None = None

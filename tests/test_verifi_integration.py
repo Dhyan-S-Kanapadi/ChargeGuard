@@ -44,5 +44,17 @@ def test_verifi_client_raises_for_error_response() -> None:
         ),
     )
 
-    with pytest.raises(VerifiRequestError):
+    with pytest.raises(VerifiRequestError) as error:
         client.search_alerts({"payment_id": "pay_123"})
+    assert error.value.status_code == 503
+
+
+def test_verifi_client_redacts_credential_echoes() -> None:
+    client = VerifiClient(
+        api_key="key_123",
+        base_url="https://verifi.test",
+        client=httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"echo": "key_123", "matched": False})
+        )),
+    )
+    assert client.search_alerts({"payment_id": "pay_123"})["echo"] == "[REDACTED]"

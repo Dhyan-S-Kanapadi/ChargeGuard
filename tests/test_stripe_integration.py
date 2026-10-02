@@ -73,3 +73,12 @@ def test_stripe_client_verifies_with_read_only_account_lookup() -> None:
     )
 
     assert client.verify_credentials() == "acct_123"
+
+
+def test_stripe_client_lists_one_bounded_dispute_page() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/disputes"
+        assert request.url.params["limit"] == "2"
+        return httpx.Response(200, json={"data": [{"id": "dp_1"}, {"id": "dp_2"}, {"id": "dp_3"}]})
+    client = StripeClient(api_key="sk_test_123", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert client.list_disputes(limit=2) == [{"id": "dp_1"}, {"id": "dp_2"}]

@@ -1,201 +1,252 @@
-from contextlib import asynccontextmanager
-import logging
+"""Verified Supabase identity plus explicit, deny-by-default route permissions."""
+from functools import lru_cache
 import os
-from pathlib import Path
+from typing import Literal
+from uuid import UUID
 
-from fastapi import Depends, FastAPI, Request
-from fastapi.exception_handlers import request_validation_exception_handler
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, ConfigDict
+from starlette.concurrency import run_in_threadpool
 
-from api.assistant import router as assistant_router
-from api.auth import require_api_key
-from api.identity import router as identity_router
-from core.identity import validate_identity_configuration
-from core.runtime import provider_modes, runtime_environment, validate_runtime_environment
-from core.runtime import RuntimeConfigurationError
-from db.postgres import StoreConflictError
-from api.demo_bootstrap import seed_demo_merchant
-from api.public_demo import router as public_demo_router, validate_public_demo
-from api.disputes import router as disputes_router
-from api.device_risk_connectors import router as device_risk_connectors_router
-from api.merchants import router as merchants_router
-from api.orders import router as orders_router
-from api.payment_connectors import router as payment_connectors_router
-from api.shipping_connectors import router as shipping_connectors_router
-from api.support_connectors import router as support_connectors_router
-from api.razorpay_admin import (
-    router as razorpay_admin_router,
-    schedule_startup_razorpay_recovery,
-)
-from api.razorpay_simulator import router as razorpay_simulator_router
-from api.razorpay_webhooks import router as razorpay_webhooks_router
-from api.stripe_webhooks import router as stripe_webhooks_router
-from api.stripe_admin import router as stripe_admin_router, schedule_startup_stripe_recovery
-from api.stats import router as stats_router
-from api.webhooks import router as webhooks_router
-from api.store import store
-from ml.model import WinProbabilityModel
+from core.identity import auth_mode, supabase_url, validate_identity_configuration
+from db.identity import IdentityStore
 
 
-logger = logging.getLogger(__name__)
+def identity_store():
+    from api.store import store
+    if not hasattr(store, "database_url"):
+        raise HTTPException(503, "Production identity requires PostgreSQL.")
+    return IdentityStore(store)
 
 
-def _log_deployment_warnings() -> None:
-    if os.getenv("ENVIRONMENT", "development").strip().lower() != "production":
-        return
-    if not hasattr(store, "check_ready") and not os.getenv("CHARGEGUARD_STORE_PATH", "").strip():
-        logger.warning(
-            "CHARGEGUARD_STORE_PATH is not configured in production; provider events "
-            "and disputes will not survive a restart."
-        )
-    if not os.getenv("CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY", "").strip():
-        logger.warning(
-            "CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY is not configured; "
-            "merchant provider connectors will fail closed."
-        )
-    if not os.getenv("CHARGEGUARD_CREDENTIAL_STORE_PATH", "").strip():
-        logger.warning(
-            "CHARGEGUARD_CREDENTIAL_STORE_PATH is not configured; "
-            "merchant provider connectors will fail closed."
-        )
-    if os.getenv("ALLOW_GLOBAL_PAYMENT_CREDENTIAL_FALLBACK", "false").strip().lower() in {
-        "1", "true", "yes", "on"
-    }:
-        logger.warning("Global payment credential fallback is enabled in production.")
-    if os.getenv("ALLOW_GLOBAL_SEON_CREDENTIAL_FALLBACK", "false").strip().lower() in {
-        "1", "true", "yes", "on"
-    }:
-        logger.warning("Global SEON credential fallback is enabled in production.")
-    if hasattr(store, "check_ready"):
-        logger.warning("PostgreSQL is configured; managed credentials and durable jobs are still required before multi-worker deployment.")
-    else:
-        logger.warning(
-            "The synchronized storage supports one application process only, including "
-            "the JSON and encrypted credential files. "
-            "Multi-worker production requires a shared transactional database and "
-            "durable queue/outbox with atomic event claim and job creation."
-        )
+@lru_cache(maxsize=2)
+def signing_keys(url):
+    return jwt.PyJWKClient(url + "/auth/v1/.well-known/jwks.json", timeout=5, lifespan=300)
 
 
-@asynccontextmanager
-async def _lifespan(_: FastAPI):
-    validate_runtime_environment()
-    validate_identity_configuration()
-    if hasattr(store, "check_ready"):
-        store.check_ready()
-    _log_deployment_warnings()
-    seed_demo_merchant()
-    validate_public_demo()
-    schedule_startup_razorpay_recovery()
-    schedule_startup_stripe_recovery()
-    yield
-
-
-app = FastAPI(title="ChargeGuard AI", version="0.1.0", lifespan=_lifespan)
-
-
-@app.exception_handler(StoreConflictError)
-async def store_conflict_handler(request: Request, exc: StoreConflictError):
-    return JSONResponse(status_code=409, content={"detail": "Store conflict; reload the resource before retrying."})
-
-
-@app.exception_handler(RuntimeConfigurationError)
-async def runtime_error_handler(request: Request, exc: RuntimeConfigurationError):
-    return JSONResponse(status_code=503, content={"detail": "Required runtime capability is unavailable."})
-
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(
-    request: Request,
-    exc: RequestValidationError,
-):
-    if "/device-risk-connectors" in request.url.path:
-        return JSONResponse(
-            status_code=422,
-            content={"detail": "invalid_device_risk_connector_request"},
-        )
-    if "/payment-connectors" in request.url.path:
-        return JSONResponse(
-            status_code=422,
-            content={"detail": "invalid_payment_connector_request"},
-        )
-    if "/shipping-connectors" in request.url.path:
-        return JSONResponse(
-            status_code=422,
-            content={"detail": "invalid_shipping_connector_request"},
-        )
-    if "/support-connectors" in request.url.path:
-        return JSONResponse(
-            status_code=422,
-            content={"detail": "invalid_support_connector_request"},
-        )
-    return await request_validation_exception_handler(request, exc)
-
-
-app.include_router(webhooks_router)
-app.include_router(identity_router)
-app.include_router(disputes_router)
-app.include_router(merchants_router)
-app.include_router(orders_router)
-app.include_router(payment_connectors_router)
-app.include_router(shipping_connectors_router)
-app.include_router(support_connectors_router)
-app.include_router(device_risk_connectors_router)
-app.include_router(stats_router)
-app.include_router(assistant_router)
-app.include_router(public_demo_router)
-app.include_router(razorpay_admin_router)
-app.include_router(razorpay_webhooks_router)
-app.include_router(stripe_webhooks_router)
-app.include_router(stripe_admin_router)
-app.include_router(razorpay_simulator_router)
-
-
-def _dashboard_directory() -> Path:
-    root = Path(__file__).resolve().parent
-    frontend_build = root / "frontend" / "dist"
-    if (frontend_build.joinpath("index.html").is_file()):
-        return frontend_build
-    return root / "static"
-
-
-app.mount("/dashboard", StaticFiles(directory=_dashboard_directory(), html=True), name="dashboard")
-
-
-def _model_loaded() -> bool:
-    artifact_path = Path(os.getenv("MODEL_PATH", "./ml/artifacts/win_probability_model.pkl"))
-    if not artifact_path.is_file():
-        return False
+def verify_token(token):
+    url = supabase_url()
     try:
-        WinProbabilityModel.load(artifact_path)
-    except (OSError, TypeError, ValueError):
-        return False
-    return True
+        if len(token) > 16384:
+            raise ValueError()
+        header = jwt.get_unverified_header(token)
+        if header.get("alg") not in {"ES256", "RS256"} or not isinstance(header.get("kid"), str):
+            raise ValueError()
+        key = signing_keys(url).get_signing_key_from_jwt(token)
+        claims = jwt.decode(token, key.key, algorithms=["ES256", "RS256"],
+                            audience="authenticated", issuer=url + "/auth/v1",
+                            options={"require": ["exp", "iat", "sub", "iss", "aud", "session_id", "aal"]})
+        if (claims.get("role") != "authenticated" or claims.get("is_anonymous") is not False
+                or claims["aal"] not in {"aal1", "aal2"}
+                or not isinstance(claims["sub"], str) or not isinstance(claims["session_id"], str)
+                or type(claims["iat"]) is not int or type(claims["exp"]) is not int
+                or not 0 < claims["exp"] - claims["iat"] <= 600):
+            raise ValueError()
+        claims["sub"] = str(UUID(claims["sub"]))
+        claims["session_id"] = str(UUID(claims["session_id"]))
+        return claims
+    except jwt.PyJWKClientConnectionError:
+        raise HTTPException(503, "Identity verification is temporarily unavailable.") from None
+    except (jwt.PyJWTError, ValueError, TypeError, KeyError):
+        raise HTTPException(401, "Invalid or expired login token.", headers={"WWW-Authenticate": "Bearer"}) from None
 
 
-def _stub_mode() -> bool:
-    return os.getenv("CHARGEGUARD_USE_STUBS", "").strip().lower() in {"1", "true", "yes", "on"}
+# Route templates, not path prefixes. New routes are denied until explicitly reviewed.
+READ_ROUTES = {
+    "/disputes", "/disputes/{chargeback_id}", "/disputes/{chargeback_id}/summary",
+    "/merchants", "/merchants/{merchant_id}", "/stats", "/assistant/status",
+    "/merchants/{merchant_id}/payment-connectors", "/merchants/{merchant_id}/shipping-connectors", "/merchants/{merchant_id}/support-connectors", "/merchants/{merchant_id}/consortium-connectors", "/merchants/{merchant_id}/device-risk-connectors",
+}
+OWNER_WRITES = {
+    ("PATCH", "/merchants/{merchant_id}"), ("POST", "/merchants/{merchant_id}/sync-shopify-history"),
+    ("POST", "/orders/ingest"), ("POST", "/webhook/chargeback"),
+    ("POST", "/merchants/{merchant_id}/payment-connectors/razorpay"),
+    ("POST", "/merchants/{merchant_id}/payment-connectors/stripe"),
+    ("POST", "/merchants/{merchant_id}/payment-connectors/{connector_id}/verify"),
+    ("DELETE", "/merchants/{merchant_id}/payment-connectors/{connector_id}"),
+    ("POST", "/merchants/{merchant_id}/shipping-connectors/shiprocket"),
+    ("POST", "/merchants/{merchant_id}/shipping-connectors/delhivery"),
+    ("POST", "/merchants/{merchant_id}/shipping-connectors/{connector_id}/verify"),
+    ("DELETE", "/merchants/{merchant_id}/shipping-connectors/{connector_id}"),
+    ("POST", "/merchants/{merchant_id}/support-connectors/gmail"),
+    ("POST", "/merchants/{merchant_id}/support-connectors/freshdesk"),
+    ("POST", "/merchants/{merchant_id}/support-connectors/{connector_id}/verify"),
+    ("DELETE", "/merchants/{merchant_id}/support-connectors/{connector_id}"),
+    ("POST", "/merchants/{merchant_id}/consortium-connectors/ethoca"),
+    ("POST", "/merchants/{merchant_id}/consortium-connectors/verifi"),
+    ("POST", "/merchants/{merchant_id}/consortium-connectors/{connector_id}/verify"),
+    ("DELETE", "/merchants/{merchant_id}/consortium-connectors/{connector_id}"),
+    ("POST", "/merchants/{merchant_id}/device-risk-connectors/seon"),
+    ("POST", "/merchants/{merchant_id}/device-risk-connectors/{connector_id}/verify"),
+    ("DELETE", "/merchants/{merchant_id}/device-risk-connectors/{connector_id}"),
+}
+REVIEW_WRITES = {
+    ("POST", "/disputes/{chargeback_id}/classification/suggestion"),
+    ("POST", "/disputes/{chargeback_id}/classification/suggestion/reject"),
+    ("POST", "/disputes/{chargeback_id}/classification"),
+    ("POST", "/disputes/{chargeback_id}/outcome"),
+}
+ADMIN_ROUTES = {
+    ("POST", "/merchants"), ("GET", "/internal/runtime"),
+    ("GET", "/internal/razorpay/events"), ("POST", "/internal/razorpay/events/{event_id}/retry"),
+    ("POST", "/internal/razorpay/process-pending"), ("POST", "/internal/razorpay/reconcile"),
+    ("POST", "/internal/stripe/events/{event_id}/retry"), ("POST", "/internal/stripe/process-pending"), ("POST", "/internal/stripe/reconcile"),
+    ("POST", "/auth/users/{user_id}"),
+}
+SELF_ROUTES = {("GET", "/auth/me"), ("POST", "/auth/session/revoke")}
+MEMBER_ROUTE = "/auth/merchants/{merchant_id}/members/{user_id}"
 
 
-@app.get("/health")
-async def health() -> dict[str, str | bool]:
-    model_loaded = _model_loaded()
-    return {
-        "status": "ok" if model_loaded else "degraded",
-        "model_loaded": model_loaded,
-        "stub_mode": _stub_mode(),
-    }
+def authorize_route(request, principal, body):
+    from api.store import store
+    route = request.scope["route"].path
+    action = (request.method, route)
+    if action in SELF_ROUTES:
+        return None
+    if principal.platform_admin:
+        if principal.aal == "aal2" and (action in ADMIN_ROUTES or (route == MEMBER_ROUTE and request.method in {"POST", "DELETE"})):
+            return request.path_params.get("merchant_id")
+        raise HTTPException(403, "Platform administrators use separate administration routes and MFA.")
+    if principal.aal != "aal2" and any(role in {"owner", "reviewer"} for role in principal.memberships.values()):
+        raise HTTPException(403, "MFA is required for owners and reviewers.")
+    if action in ADMIN_ROUTES:
+        raise HTTPException(403, "Platform administrator required.")
+    roles = {"owner", "reviewer", "read_only"}
+    if action in OWNER_WRITES or (route == MEMBER_ROUTE and request.method in {"POST", "DELETE"}):
+        roles = {"owner"}
+    elif action in REVIEW_WRITES:
+        roles = {"owner", "reviewer"}
+    elif not ((request.method == "GET" and route in READ_ROUTES) or action == ("POST", "/assistant/query")):
+        raise HTTPException(403, "Route is not enabled for merchant accounts.")
+    merchant = request.path_params.get("merchant_id")
+    if route in {"/orders/ingest", "/webhook/chargeback"}:
+        merchant = body.get("merchant_id")
+        if not isinstance(merchant, str) or not merchant:
+            raise HTTPException(422, "merchant_id is required.")
+    case = request.path_params.get("chargeback_id") or (body.get("chargeback_id") if route == "/assistant/query" else None)
+    if case:
+        if not isinstance(case, str):
+            raise HTTPException(422, "Invalid case identifier.")
+        record = store.get_dispute(case)
+        merchant = record["state"].get("merchant_profile", {}).get("merchant_id") if record else None
+        if not merchant:
+            raise HTTPException(404, "Resource not found.")
+    if merchant is not None and principal.memberships.get(merchant) not in roles:
+        # Same response for missing and foreign resources; no existence oracle.
+        raise HTTPException(404, "Resource not found.")
+    for requested in request.query_params.getlist("merchant_id"):
+        if requested not in principal.memberships:
+            raise HTTPException(404, "Resource not found.")
+    if request.query_params.get("include_raw", "false").lower() not in {"false", "0", "off", "no"}:
+        if principal.memberships.get(merchant) != "owner":
+            raise HTTPException(403, "Raw evidence requires merchant owner permission and the internal token.")
+    return merchant
 
 
-@app.get("/internal/runtime", dependencies=[Depends(require_api_key)])
-async def runtime_status() -> dict:
-    return {
-        "environment": runtime_environment(),
-        "evidence_providers": provider_modes(),
-        "production_ready": False,
-        "submission": "local_stub_only_outside_production",
-        "remaining_prerequisites": ["durable_jobs", "live_identity_setup_verification",
-                                    "private_versioned_artifacts", "verified_human_submission"],
-    }
+async def authenticate_request(request, authorization):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Supabase login required.", headers={"WWW-Authenticate": "Bearer"})
+    claims = await run_in_threadpool(verify_token, authorization[7:])
+    repository = identity_store()
+    principal = await run_in_threadpool(repository.authenticate, claims)
+    request.state.principal = principal
+    body = {}
+    if request.method in {"POST", "PATCH", "PUT"}:
+        try:
+            body = await request.json()
+        except ValueError:
+            pass  # Let the endpoint schema reject malformed bodies after authorization.
+        if not isinstance(body, dict):
+            body = {}
+    action = request.method + " " + request.scope["route"].path
+    try:
+        merchant = await run_in_threadpool(authorize_route, request, principal, body)
+    except HTTPException:
+        await run_in_threadpool(repository.audit, principal, action, "denied")
+        raise
+    # Fail closed if the authorization audit cannot be committed before an effect.
+    await run_in_threadpool(repository.audit, principal, action, "authorized", merchant)
+    return principal.user_id  # Rate-limit by user, never by the raw bearer token.
+
+
+def visible_disputes(request, records):
+    principal = getattr(request.state, "principal", None)
+    if principal is None:
+        if auth_mode() == "supabase":
+            raise HTTPException(401, "Login required.")
+        return records
+    selected = request.query_params.get("merchant_id")
+    return [record for record in records
+            if (merchant := record["state"].get("merchant_profile", {}).get("merchant_id")) in principal.memberships
+            and (not selected or merchant == selected)]
+
+
+def verified_actor(request, supplied):
+    principal = getattr(request.state, "principal", None)
+    return principal.user_id if principal else supplied
+
+
+from api.auth import require_api_key  # Imported after helpers to avoid dependency cycle.
+
+router = APIRouter(prefix="/auth", tags=["identity"])
+
+
+@router.get("/config")
+def configuration():
+    if auth_mode() != "supabase":
+        return {"mode": "operator"}
+    validate_identity_configuration()
+    return {"mode": "supabase", "url": supabase_url(), "publishable_key": os.environ["SUPABASE_PUBLISHABLE_KEY"]}
+
+
+@router.get("/me", dependencies=[Depends(require_api_key)])
+def current_user(request: Request):
+    principal = getattr(request.state, "principal", None)
+    if principal is None:
+        raise HTTPException(404, "Merchant identity is not enabled.")
+    return {"user_id": principal.user_id, "aal": principal.aal,
+            "platform_admin": principal.platform_admin, "memberships": principal.memberships}
+
+
+@router.post("/session/revoke", dependencies=[Depends(require_api_key)])
+def revoke(request: Request):
+    principal = getattr(request.state, "principal", None)
+    if principal is None:
+        raise HTTPException(404, "Merchant identity is not enabled.")
+    identity_store().revoke_session(principal)
+    return {"status": "revoked"}
+
+
+class AccountStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    active: bool = True
+
+
+class Membership(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: Literal["owner", "reviewer", "read_only"]
+
+
+@router.post("/users/{user_id}", dependencies=[Depends(require_api_key)])
+def provision(request: Request, user_id: UUID, payload: AccountStatus):
+    if not getattr(request.state, "principal", None):
+        raise HTTPException(403, "Production identity required.")
+    identity_store().provision_user(request.state.principal, str(user_id), supabase_url() + "/auth/v1", payload.active)
+    return {"status": "updated"}
+
+
+@router.post("/merchants/{merchant_id}/members/{user_id}", dependencies=[Depends(require_api_key)])
+def set_membership(request: Request, merchant_id: str, user_id: UUID, payload: Membership):
+    if not getattr(request.state, "principal", None):
+        raise HTTPException(403, "Production identity required.")
+    identity_store().membership(request.state.principal, merchant_id, str(user_id), payload.role)
+    return {"status": "updated"}
+
+
+@router.delete("/merchants/{merchant_id}/members/{user_id}", dependencies=[Depends(require_api_key)])
+def remove_membership(request: Request, merchant_id: str, user_id: UUID):
+    if not getattr(request.state, "principal", None):
+        raise HTTPException(403, "Production identity required.")
+    identity_store().membership(request.state.principal, merchant_id, str(user_id), None)
+    return {"status": "removed"}

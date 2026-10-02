@@ -22,16 +22,22 @@ def connector_env_value(
     return values.get(name)
 
 
-def redact_credential_echoes(value, *secrets: str):
-    """Prevent a provider echoing authentication material into evidence state."""
+def redact_provider_credentials(value, *credentials: str):
+    """Remove credential echoes before a provider response reaches evidence state."""
     if isinstance(value, str):
-        for secret in secrets:
-            if secret:
-                value = value.replace(secret, "[REDACTED]")
+        for credential in credentials:
+            if credential:
+                value = value.replace(credential, "[REDACTED]")
         return value
     if isinstance(value, dict):
-        return {redact_credential_echoes(k, *secrets): redact_credential_echoes(v, *secrets)
-                for k, v in value.items()}
+        return {
+            redact_provider_credentials(key, *credentials): redact_provider_credentials(item, *credentials)
+            for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [redact_credential_echoes(v, *secrets) for v in value]
+        return [redact_provider_credentials(item, *credentials) for item in value]
     return value
+
+
+def redact_credential_echoes(value, *secrets: str):
+    return redact_provider_credentials(value, *secrets)
