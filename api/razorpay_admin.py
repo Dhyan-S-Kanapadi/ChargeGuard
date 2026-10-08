@@ -16,7 +16,6 @@ from api.razorpay_processor import (
 from api.razorpay_worker import process_next_razorpay_provider_event_job
 from api.schemas import RazorpayReconciliationRequest
 from api.store import store
-from core.runtime import runtime_environment
 from integrations.razorpay import (
     RazorpayClient,
     RazorpayConfigError,
@@ -78,7 +77,7 @@ def _safe_event_response(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _enqueue_event(background_tasks: BackgroundTasks, event_id: str) -> None:
-    if runtime_environment() == "test" or not hasattr(store, "database_url"):
+    if getattr(store, "environment", None) == "test" or not hasattr(store, "database_url"):
         background_tasks.add_task(process_next_razorpay_provider_event_job)
 
 
@@ -160,7 +159,7 @@ def _startup_recovery_worker(limit: int) -> None:
 def schedule_startup_razorpay_recovery() -> bool:
     """Start one non-blocking recovery worker when startup recovery is enabled."""
     global _startup_recovery_started
-    if hasattr(store, "database_url"):
+    if hasattr(store, "database_url") and getattr(store, "environment", None) != "test":
         return False
     if not _env_flag("RAZORPAY_RECOVER_PENDING_ON_STARTUP", True):
         return False

@@ -78,7 +78,7 @@ def enqueue_razorpay_provider_event(
     event_id: str,
 ) -> None:
     """Wake the local/demo worker; PostgreSQL workers poll the durable outbox."""
-    if runtime_environment() == "test" or not hasattr(store, "database_url"):
+    if getattr(store, "environment", None) == "test" or not hasattr(store, "database_url"):
         background_tasks.add_task(process_next_razorpay_provider_event_job)
 
 
