@@ -16,6 +16,7 @@ from api.razorpay_processor import (
 from api.razorpay_worker import process_next_razorpay_provider_event_job
 from api.schemas import RazorpayReconciliationRequest
 from api.store import store
+from core.runtime import runtime_environment
 from integrations.razorpay import (
     RazorpayClient,
     RazorpayConfigError,
@@ -77,7 +78,7 @@ def _safe_event_response(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _enqueue_event(background_tasks: BackgroundTasks, event_id: str) -> None:
-    if not hasattr(store, "database_url"):
+    if runtime_environment() == "test" or not hasattr(store, "database_url"):
         background_tasks.add_task(process_next_razorpay_provider_event_job)
 
 
