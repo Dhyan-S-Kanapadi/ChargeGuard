@@ -1,7 +1,10 @@
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from agents.filing import filing_agent
+from api.store import store
 from core.state import ChargebackState
+from integrations.artifact_storage import artifact_object_key, artifact_storage
 
 
 def _state() -> ChargebackState:
@@ -51,12 +54,25 @@ def _state() -> ChargebackState:
     }
 
 
+def _approved_artifact(state: ChargebackState) -> None:
+    if store.get_dispute(state["chargeback_id"]) is None:
+        assert store.create_dispute(state)
+    artifact_id = uuid4().hex
+    merchant_id = state["merchant_profile"]["merchant_id"]
+    key = artifact_object_key(merchant_id=merchant_id, chargeback_id=state["chargeback_id"], artifact_id=artifact_id, filename="rebuttal.pdf")
+    saved = artifact_storage().put_immutable(key, b"%PDF- artifact")
+    assert store.create_artifact({"artifact_id": artifact_id, "merchant_id": merchant_id,
+                                  "chargeback_id": state["chargeback_id"], "artifact_type": "rebuttal_pdf",
+                                  "object_key": saved.object_key, "content_type": "application/pdf",
+                                  "size_bytes": saved.size_bytes, "sha256": saved.sha256})
+    assert store.finalize_artifacts(merchant_id, state["chargeback_id"], [artifact_id])
+    state["rebuttal_artifact_id"] = artifact_id
+
+
 def test_filing_agent_records_confirmation_for_approved_packet(tmp_path) -> None:
-    path = tmp_path / "rebuttal.json"
-    path.write_text("{}", encoding="utf-8")
     state = _state()
     state["quality_approved"] = True
-    state["rebuttal_document_path"] = str(path)
+    _approved_artifact(state)
 
     result = filing_agent(state)
 
@@ -66,11 +82,9 @@ def test_filing_agent_records_confirmation_for_approved_packet(tmp_path) -> None
 
 
 def test_filing_agent_blocks_unapproved_packets(tmp_path) -> None:
-    path = tmp_path / "rebuttal.json"
-    path.write_text("{}", encoding="utf-8")
     state = _state()
     state["quality_approved"] = False
-    state["rebuttal_document_path"] = str(path)
+    _approved_artifact(state)
 
     result = filing_agent(state)
 
@@ -81,7 +95,21 @@ def test_filing_agent_blocks_unapproved_packets(tmp_path) -> None:
 def test_filing_agent_blocks_missing_rebuttal_document() -> None:
     state = _state()
     state["quality_approved"] = True
-    state["rebuttal_document_path"] = "missing.json"
+
+    result = filing_agent(state)
+
+    assert result["filed_at"] is None
+    assert result["filing_confirmation"] == "filing_blocked_missing_rebuttal"
+
+
+def test_filing_agent_rechecks_approved_artifact_integrity() -> None:
+    state = _state()
+    state["quality_approved"] = True
+    _approved_artifact(state)
+    artifact = store.get_artifact(state["rebuttal_artifact_id"])
+    assert artifact is not None
+    from pathlib import Path
+    Path(artifact_storage().root / artifact["object_key"]).write_bytes(b"tampered")
 
     result = filing_agent(state)
 

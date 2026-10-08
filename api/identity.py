@@ -58,6 +58,7 @@ READ_ROUTES = {
     "/merchants", "/merchants/{merchant_id}", "/stats", "/assistant/status",
     "/merchants/{merchant_id}/payment-connectors", "/merchants/{merchant_id}/shipping-connectors", "/merchants/{merchant_id}/support-connectors", "/merchants/{merchant_id}/consortium-connectors", "/merchants/{merchant_id}/device-risk-connectors",
 }
+OWNER_READ_ROUTES = set()
 OWNER_WRITES = {
     ("PATCH", "/merchants/{merchant_id}"), ("POST", "/merchants/{merchant_id}/sync-shopify-history"),
     ("POST", "/orders/ingest"), ("POST", "/webhook/chargeback"),
@@ -80,6 +81,9 @@ OWNER_WRITES = {
     ("POST", "/merchants/{merchant_id}/device-risk-connectors/seon"),
     ("POST", "/merchants/{merchant_id}/device-risk-connectors/{connector_id}/verify"),
     ("DELETE", "/merchants/{merchant_id}/device-risk-connectors/{connector_id}"),
+    ("POST", "/disputes/{chargeback_id}/artifacts/{artifact_id}/download-grant"),
+    ("POST", "/disputes/{chargeback_id}/artifacts/{artifact_id}/download/{grant_id}"),
+    ("POST", "/disputes/{chargeback_id}/artifacts/{artifact_id}/retention"),
 }
 REVIEW_WRITES = {
     ("POST", "/disputes/{chargeback_id}/classification/suggestion"),
@@ -113,7 +117,7 @@ def authorize_route(request, principal, body):
     if action in ADMIN_ROUTES:
         raise HTTPException(403, "Platform administrator required.")
     roles = {"owner", "reviewer", "read_only"}
-    if action in OWNER_WRITES or (route == MEMBER_ROUTE and request.method in {"POST", "DELETE"}):
+    if action in OWNER_WRITES or (request.method == "GET" and route in OWNER_READ_ROUTES) or (route == MEMBER_ROUTE and request.method in {"POST", "DELETE"}):
         roles = {"owner"}
     elif action in REVIEW_WRITES:
         roles = {"owner", "reviewer"}

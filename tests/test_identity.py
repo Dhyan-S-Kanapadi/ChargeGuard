@@ -147,6 +147,8 @@ def test_lists_stats_and_ai_are_tenant_scoped(tenant_api, monkeypatch):
     ("POST", "/orders/ingest", {"merchant_id": "merchant_b"}),
     ("POST", "/webhook/chargeback", {"merchant_id": "merchant_b"}),
     ("POST", "/disputes/case_b/outcome", {"outcome": "WIN"}),
+    ("POST", "/disputes/case_b/artifacts/foreign/download-grant", None),
+    ("POST", "/disputes/case_b/artifacts/foreign/download/grant", {"token": "a" * 64}),
     ("POST", "/disputes/case_b/classification", {}),
     ("POST", "/merchants/merchant_b/payment-connectors/razorpay", {}),
     ("POST", "/merchants/merchant_b/shipping-connectors/shiprocket", {}),
@@ -159,6 +161,40 @@ def test_foreign_resources_fail_before_effects(tenant_api, method, path, body):
     client, pg, issue = tenant_api
     assert client.request(method, path, headers=headers(issue), json=body).status_code == 404
     assert pg.get_merchant("merchant_b")["name"] == "merchant_b"
+
+
+def test_private_artifact_download_is_owner_scoped_and_uses_post_body(tenant_api, monkeypatch, tmp_path):
+    client, pg, issue = tenant_api
+    monkeypatch.setenv("INTERNAL_API_TOKEN", "artifact-internal-token")
+    monkeypatch.setenv("CHARGEGUARD_ARTIFACT_LOCAL_DIR", str(tmp_path))
+    from integrations.artifact_storage import artifact_object_key, artifact_storage
+
+    artifact_id = "artifact_owner_a"
+    key = artifact_object_key(
+        merchant_id="merchant_a", chargeback_id="case_a", artifact_id=artifact_id, filename="rebuttal.pdf"
+    )
+    saved = artifact_storage().put_immutable(key, b"%PDF-private")
+    assert pg.create_artifact({
+        "artifact_id": artifact_id, "merchant_id": "merchant_a", "chargeback_id": "case_a",
+        "artifact_type": "rebuttal_pdf", "object_key": saved.object_key,
+        "content_type": "application/pdf", "size_bytes": saved.size_bytes, "sha256": saved.sha256,
+    })
+    owner_headers = {**headers(issue), "X-Internal-Token": "artifact-internal-token"}
+    grant = client.post(f"/disputes/case_a/artifacts/{artifact_id}/download-grant", headers=owner_headers)
+    assert grant.status_code == 200
+    body = grant.json()
+    assert client.post(
+        f"/disputes/case_a/artifacts/{artifact_id}/download/{body['grant_id']}",
+        headers=owner_headers, json={"token": body["token"]},
+    ).content == b"%PDF-private"
+    assert client.get(
+        f"/disputes/case_a/artifacts/{artifact_id}/download/{body['grant_id']}?token={body['token']}",
+        headers=owner_headers,
+    ).status_code == 405
+    assert client.post(
+        f"/disputes/case_a/artifacts/{artifact_id}/download-grant",
+        headers={**headers(issue, "reader"), "X-Internal-Token": "artifact-internal-token"},
+    ).status_code == 404
 
 
 def test_roles_mfa_admin_separation_and_legacy_denial(tenant_api):

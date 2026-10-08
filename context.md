@@ -161,8 +161,8 @@ File: `agents/scoring.py`
 File: `agents/rebuttal_builder.py`
 
 - Builds a deterministic JSON rebuttal packet.
-- Writes output under `REBUTTAL_OUTPUT_DIR` or `./output/rebuttals`.
-- Sets `rebuttal_document_path`.
+- Stores private PDF and JSON artifacts under the configured development/test local artifact root.
+- Sets artifact IDs; it does not expose a filesystem path.
 
 ### Quality Check Agent
 

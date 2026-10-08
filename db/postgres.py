@@ -32,9 +32,10 @@ TABLES = {
     "device_risk_connectors": ("connector_id",), "orders": ("merchant_id", "order_id"),
     "disputes": ("chargeback_id",), "provider_events": ("event_id",),
     "provider_event_jobs": ("event_id",),
+    "artifacts": ("artifact_id",), "artifact_download_grants": ("grant_id",),
     "simulator_disputes": ("dispute_id",),
     "payment_connector_audit": (), "shipping_connector_audit": (), "support_connector_audit": (),
-    "consortium_connector_audit": (), "device_risk_connector_audit": (),
+    "consortium_connector_audit": (), "device_risk_connector_audit": (), "artifact_access_audit": (),
 }
 # Explicit allowlist: a future local method needs a database-contract review.
 READS = frozenset({
@@ -49,6 +50,7 @@ READS = frozenset({
     "get_provider_event", "list_provider_events", "list_provider_events_for_dispute",
     "list_recoverable_provider_events", "list_provider_event_jobs",
     "get_simulator_dispute", "list_simulator_disputes",
+    "get_artifact", "get_case_artifact",
 })
 WRITES = frozenset({
     "create_merchant", "update_merchant", "create_payment_connector", "activate_payment_connector",
@@ -65,6 +67,8 @@ WRITES = frozenset({
     "enqueue_provider_event_job", "claim_next_provider_event_job", "start_provider_event_processing",
     "complete_provider_event_job", "retry_provider_event_job", "update_provider_event_for_job",
     "requeue_provider_event", "update_provider_event", "create_simulator_dispute", "update_simulator_dispute",
+    "create_artifact", "attach_rebuttal_artifacts", "finalize_artifacts", "approve_rebuttal_artifacts", "mark_artifact_retention", "create_artifact_download_grant",
+    "redeem_artifact_download_grant",
 })
 JSON_COLUMNS = {"state", "event_data", "snapshot", "shipping_address"}
 EVENT_ALIASES = {"provider_event_id": "event_id", "event_name": "event_type",

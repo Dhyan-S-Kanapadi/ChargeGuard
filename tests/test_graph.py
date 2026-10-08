@@ -5,6 +5,7 @@ from agents.evidence import device
 from core import graph as graph_module
 from core.graph import app
 from core.state import ChargebackState
+from api.store import store
 from ml.train import train_baseline_model
 
 
@@ -59,6 +60,7 @@ def test_chargeback_graph_runs_from_start_to_end(tmp_path, monkeypatch) -> None:
         "outcome_recorded_at": None,
     }
 
+    assert store.create_dispute(state)
     result = app.invoke(state)
 
     assert result["chargeback_id"] == "cb_test_001"
@@ -69,7 +71,8 @@ def test_chargeback_graph_runs_from_start_to_end(tmp_path, monkeypatch) -> None:
     assert result["comms"] is not None
     assert result["consortium"] is not None
     assert result["quality_approved"] is True
-    assert result["rebuttal_document_path"] is not None
+    assert result["rebuttal_document_path"] is None
+    assert result["rebuttal_artifact_id"] is not None
     assert result["filing_confirmation"] is not None
     assert result["filing_confirmation"].startswith("filed_visa_cb_test_001_")
 
@@ -277,6 +280,7 @@ def test_overdue_case_skips_slow_evidence_and_scores_with_partial_evidence(
         "outcome_recorded_at": None,
     }
 
+    assert store.create_dispute(state)
     result = expedited_app.invoke(state)
 
     assert slow_agent_calls == []

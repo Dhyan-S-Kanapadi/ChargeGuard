@@ -1,9 +1,9 @@
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 from core.state import ChargebackState
 from core.runtime import assert_workflow_environment, runtime_environment
+from integrations.artifact_storage import ArtifactStorageError, artifact_storage
 
 
 logger = logging.getLogger(__name__)
@@ -37,8 +37,20 @@ def filing_agent(state: ChargebackState) -> ChargebackState:
         state["filing_confirmation"] = "filing_blocked_quality_not_approved"
         return state
 
-    path = state.get("rebuttal_document_path")
-    if not path or not Path(path).exists():
+    artifact_id = state.get("rebuttal_artifact_id")
+    if not artifact_id:
+        state["filing_confirmation"] = "filing_blocked_missing_rebuttal"
+        return state
+    from api.store import store
+    artifact = store.get_case_artifact(
+        state["merchant_profile"]["merchant_id"], state["chargeback_id"], artifact_id
+    )
+    if not artifact or not artifact.get("immutable_at"):
+        state["filing_confirmation"] = "filing_blocked_rebuttal_not_immutable"
+        return state
+    try:
+        artifact_storage().read_verified(artifact["object_key"], artifact["sha256"])
+    except ArtifactStorageError:
         state["filing_confirmation"] = "filing_blocked_missing_rebuttal"
         return state
 

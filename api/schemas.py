@@ -543,6 +543,22 @@ class DisputeDetail(BaseModel):
     updated_at: datetime
 
 
+class ArtifactDownloadGrant(BaseModel):
+    grant_id: str
+    token: str
+    expires_at: datetime
+
+
+class ArtifactDownloadRedeem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=64, max_length=128, pattern=r"^[0-9a-f]+$")
+
+
+class ArtifactRetentionMark(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class RazorpaySimulatorCreate(BaseModel):
     merchant_id: str = Field(min_length=1, max_length=100)
     payment_id: str = Field(min_length=1, max_length=200)
