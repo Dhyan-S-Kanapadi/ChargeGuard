@@ -9,13 +9,11 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
-from api import webhooks as internal_webhooks
 from api.auth import require_api_key
 from api.razorpay_processor import (
-    process_razorpay_provider_event,
     safe_razorpay_failure_reason,
 )
-from api.razorpay_service import process_normalized_dispute
+from api.razorpay_worker import process_next_razorpay_provider_event_job
 from api.schemas import RazorpayReconciliationRequest
 from api.store import store
 from integrations.razorpay import (
@@ -30,10 +28,7 @@ from integrations.payment_client_factory import (
     global_payment_fallback_enabled,
 )
 from integrations.razorpay_schemas import RazorpayWebhookEnvelope
-from integrations.razorpay_webhook import (
-    normalize_dispute,
-    serialize_envelope_for_processing,
-)
+from integrations.razorpay_webhook import serialize_envelope_for_processing
 
 
 router = APIRouter(
@@ -82,7 +77,8 @@ def _safe_event_response(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _enqueue_event(background_tasks: BackgroundTasks, event_id: str) -> None:
-    background_tasks.add_task(process_razorpay_provider_event, event_id)
+    if getattr(store, "environment", None) == "test" or not hasattr(store, "database_url"):
+        background_tasks.add_task(process_next_razorpay_provider_event_job)
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -131,7 +127,7 @@ def recover_pending_razorpay_events(
         ):
             skipped += 1
             continue
-        if not store.requeue_provider_event(event_id):
+        if not store.enqueue_provider_event_job(event_id):
             skipped += 1
             continue
         try:
@@ -155,7 +151,7 @@ def recover_pending_razorpay_events(
 def _startup_recovery_worker(limit: int) -> None:
     result = recover_pending_razorpay_events(
         limit=limit,
-        schedule_event=process_razorpay_provider_event,
+        schedule_event=lambda _: process_next_razorpay_provider_event_job(),
     )
     logger.info("Razorpay startup recovery completed", extra=result)
 
@@ -163,6 +159,8 @@ def _startup_recovery_worker(limit: int) -> None:
 def schedule_startup_razorpay_recovery() -> bool:
     """Start one non-blocking recovery worker when startup recovery is enabled."""
     global _startup_recovery_started
+    if hasattr(store, "database_url") and getattr(store, "environment", None) != "test":
+        return False
     if not _env_flag("RAZORPAY_RECOVER_PENDING_ON_STARTUP", True):
         return False
     with _STARTUP_RECOVERY_LOCK:
@@ -248,7 +246,7 @@ def retry_razorpay_event(
     event = store.get_provider_event(event_id)
     if event is None or event.get("provider") != "razorpay":
         raise HTTPException(status_code=404, detail="Razorpay event not found.")
-    if not store.requeue_provider_event(event_id, include_received=False):
+    if not store.enqueue_provider_event_job(event_id, include_received=False):
         raise HTTPException(
             status_code=409,
             detail="Razorpay event is not eligible for retry.",
@@ -323,11 +321,10 @@ def reconcile_razorpay_disputes(
             results.append({"status": "invalid", "provider_dispute_id": dispute_id or None})
             continue
         payment = None
-        enrichment_failure = None
         try:
             payment = client.get_payment(payment_id, expand_card=True)
-        except RazorpayRequestError as exc:
-            enrichment_failure = str(exc)
+        except RazorpayRequestError:
+            pass
         event_name = _event_for_status(str(dispute.get("status") or "open"))
         event_version = dispute.get("updated_at") or dispute.get("created_at") or 0
         event_id = f"reconcile:{dispute_id}:{event_name}:{event_version}"
@@ -337,7 +334,7 @@ def reconcile_razorpay_disputes(
         except Exception:
             results.append({"status": "invalid", "provider_dispute_id": dispute_id})
             continue
-        claimed = store.claim_provider_event(
+        claimed = store.claim_and_enqueue_provider_event(
             {
                 "event_id": event_id,
                 "provider": "razorpay",
@@ -349,40 +346,13 @@ def reconcile_razorpay_disputes(
                 "event_id_source": "reconciliation",
                 "provider_event_timestamp": envelope.created_at,
                 "event_data": event_data,
-                "processing_state": "processing",
+                "processing_state": "received",
                 "received_at": datetime.now(timezone.utc),
             }
         )
         if not claimed:
             results.append({"status": "duplicate", "provider_dispute_id": dispute_id})
             continue
-        try:
-            normalized = normalize_dispute(
-                envelope,
-                webhook_event_id=event_id,
-                enriched_payment=payment,
-                enrichment_failure_reason=enrichment_failure,
-            )
-            result = process_normalized_dispute(
-                normalized,
-                merchant,
-                lambda state: background_tasks.add_task(
-                    internal_webhooks.run_chargeback_graph,
-                    state,
-                ),
-            )
-        except Exception as exc:
-            store.update_provider_event(
-                event_id,
-                processing_state="failed",
-                failure_reason=safe_razorpay_failure_reason(exc),
-            )
-            results.append({"status": "failed", "provider_dispute_id": dispute_id})
-            continue
-        store.update_provider_event(
-            event_id,
-            processing_state=result["status"],
-            merchant_id=merchant["merchant_id"],
-        )
-        results.append(result)
+        _enqueue_event(background_tasks, event_id)
+        results.append({"status": "queued", "provider_dispute_id": dispute_id})
     return {"count": len(results), "results": results}

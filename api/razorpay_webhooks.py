@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
-from api.razorpay_processor import process_razorpay_provider_event
+from api.razorpay_worker import process_next_razorpay_provider_event_job
 from api.store import store
 from core.runtime import contains_synthetic_data, runtime_environment
 from integrations.razorpay_webhook import (
@@ -77,8 +77,9 @@ def enqueue_razorpay_provider_event(
     background_tasks: BackgroundTasks,
     event_id: str,
 ) -> None:
-    """Schedule deferred work only after the event has been persisted."""
-    background_tasks.add_task(process_razorpay_provider_event, event_id)
+    """Wake the local/demo worker; PostgreSQL workers poll the durable outbox."""
+    if getattr(store, "environment", None) == "test" or not hasattr(store, "database_url"):
+        background_tasks.add_task(process_next_razorpay_provider_event_job)
 
 
 @router.post("/razorpay")
@@ -120,27 +121,26 @@ async def receive_razorpay_webhook(
     if runtime_environment() == "production" and contains_synthetic_data(envelope.model_dump()):
         raise HTTPException(status_code=422, detail="Synthetic events are forbidden in production.")
 
-    claimed = store.claim_provider_event(
-        _initial_event_record(
-            event_id=event_id,
-            event_type=header.event,
-            account_id=header.account_id,
-            payload_hash=digest,
-            event_id_source="header" if header_event_id else "payload_hash",
-            event_data=serialize_envelope_for_processing(envelope),
-            provider_dispute_id=dispute.id,
-            payment_id=dispute.payment_id,
-            provider_event_timestamp=header.created_at,
-        )
+    record = _initial_event_record(
+        event_id=event_id,
+        event_type=header.event,
+        account_id=header.account_id,
+        payload_hash=digest,
+        event_id_source="header" if header_event_id else "payload_hash",
+        event_data=serialize_envelope_for_processing(envelope),
+        provider_dispute_id=dispute.id,
+        payment_id=dispute.payment_id,
+        provider_event_timestamp=header.created_at,
     )
-    if not claimed:
-        return {"status": "duplicate", "event_id": event_id}
 
     if header.event not in SUPPORTED_EVENTS:
+        claimed = store.claim_provider_event(record)
+        if not claimed:
+            return {"status": "duplicate", "event_id": event_id}
         store.update_provider_event(event_id, processing_state="ignored")
         return {"status": "ignored", "event_id": event_id}
 
-    if not store.queue_provider_event(event_id):
+    if not store.claim_and_enqueue_provider_event(record):
         return {"status": "duplicate", "event_id": event_id}
     enqueue_razorpay_provider_event(background_tasks, event_id)
     return JSONResponse(

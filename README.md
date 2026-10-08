@@ -572,7 +572,7 @@ For a hosted reviewer walkthrough with live Groq chat and advisory reviews, see 
 
 Run Razorpay-focused tests with `py -m pytest -q tests/test_razorpay_webhooks.py tests/test_razorpay_event_recovery.py tests/test_razorpay_integration.py tests/test_razorpay_reconciliation.py tests/test_razorpay_simulator.py`.
 
-The current synchronized store is adequate for one-process staging when `CHARGEGUARD_STORE_PATH` is configured. Production multi-worker deployment must replace it with a shared transactional database plus a queue/outbox so event claims and workflow scheduling remain atomic across processes.
+The current synchronized store is adequate for one-process staging when `CHARGEGUARD_STORE_PATH` is configured. PostgreSQL deployments use a durable Razorpay outbox: the signed receiver commits the event and job together, and a separate `python -m api.razorpay_worker` process leases/retries work. This removes the in-process scheduling gap, but does not clear the remaining production blockers listed in [PRODUCTION_IMPLEMENTATION_PROMPTS.md](PRODUCTION_IMPLEMENTATION_PROMPTS.md).
 
 ## Staging Deployment
 

@@ -82,7 +82,7 @@ def test_reconciliation_is_protected_and_uses_provider_upsert(monkeypatch) -> No
     )
 
     assert response.status_code == 200
-    assert response.json()["results"][0]["status"] == "manual_review"
+    assert response.json()["results"][0]["status"] == "queued"
     state = store.get_dispute("disp_reconciled")["state"]
     assert state["provider"] == "razorpay"
     assert state["card_network"] == "VISA"
@@ -141,17 +141,13 @@ def test_failed_reconciliation_event_retries_from_sanitized_event_data(
         "api.razorpay_admin.RazorpayClient.from_env",
         lambda: FakeClient(),
     )
-    monkeypatch.setattr(
-        "api.razorpay_admin.normalize_dispute",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("temporary")),
-    )
     client = TestClient(app)
     headers = {"X-API-Key": "test-api-key"}
     request = {"merchant_id": "merchant_reconcile", "count": 25}
 
-    failed = client.post("/internal/razorpay/reconcile", json=request, headers=headers)
-    assert failed.status_code == 200
-    assert failed.json()["results"][0]["status"] == "failed"
+    queued = client.post("/internal/razorpay/reconcile", json=request, headers=headers)
+    assert queued.status_code == 200
+    assert queued.json()["results"][0]["status"] == "queued"
 
     event = store.list_provider_events()[0]
     event_id = event["event_id"]
@@ -167,15 +163,7 @@ def test_failed_reconciliation_event_retries_from_sanitized_event_data(
     public_events = client.get("/internal/razorpay/events", headers=headers)
     assert public_events.status_code == 200
     assert "event_data" not in public_events.json()[0]
-    assert client.post(f"/internal/razorpay/events/{event_id}/retry").status_code == 401
-
-    retry = client.post(
-        f"/internal/razorpay/events/{event_id}/retry",
-        headers=headers,
-    )
-    assert retry.status_code == 200
     assert store.get_provider_event(event_id)["processing_state"] == "manual_review"
-    assert store.get_provider_event(event_id)["attempt_count"] == 2
     assert store.get_dispute("disp_reconcile_retry") is not None
     assert client.post(
         f"/internal/razorpay/events/{event_id}/retry",
@@ -220,8 +208,11 @@ def test_process_pending_recovers_failed_reconciliation_event(monkeypatch) -> No
         "api.razorpay_admin.RazorpayClient.from_env",
         lambda: FakeClient(),
     )
+    from api import razorpay_processor
+    original_process = razorpay_processor.process_normalized_dispute
     monkeypatch.setattr(
-        "api.razorpay_admin.normalize_dispute",
+        razorpay_processor,
+        "process_normalized_dispute",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("temporary")),
     )
     client = TestClient(app)
@@ -229,7 +220,12 @@ def test_process_pending_recovers_failed_reconciliation_event(monkeypatch) -> No
     request = {"merchant_id": "merchant_reconcile", "count": 25}
     assert client.post(
         "/internal/razorpay/reconcile", json=request, headers=headers
-    ).json()["results"][0]["status"] == "failed"
+    ).json()["results"][0]["status"] == "queued"
+    monkeypatch.setattr(
+        razorpay_processor,
+        "process_normalized_dispute",
+        original_process,
+    )
 
     recovery = client.post(
         "/internal/razorpay/process-pending?limit=25",

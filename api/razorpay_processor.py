@@ -33,6 +33,7 @@ def run_provider_chargeback_graph(state: ChargebackState) -> None:
 def process_razorpay_provider_event(
     event_id: str,
     *,
+    job: dict[str, Any] | None = None,
     client_factory: Callable[[], RazorpayClient] | None = None,
     schedule_graph: Callable[[ChargebackState], None] | None = None,
 ) -> dict[str, Any]:
@@ -40,13 +41,30 @@ def process_razorpay_provider_event(
     event = store.get_provider_event(event_id)
     if event is None:
         return {"status": "missing", "event_id": event_id}
-    if not store.start_provider_event_processing(event_id):
+    lease_token = job.get("lease_token") if job else None
+    if job is None and not store.start_provider_event_processing(event_id):
         current = store.get_provider_event(event_id)
         return {
             "status": "skipped",
             "event_id": event_id,
             "processing_state": current.get("processing_state") if current else None,
         }
+
+    def update_event(**updates: Any) -> bool:
+        if lease_token:
+            return store.update_provider_event_for_job(
+                event_id,
+                lease_token=lease_token,
+                **updates,
+            )
+        store.update_provider_event(event_id, **updates)
+        return True
+
+    def complete_job() -> bool:
+        return not lease_token or store.complete_provider_event_job(
+            event_id,
+            lease_token=lease_token,
+        )
 
     try:
         event = store.get_provider_event(event_id)
@@ -55,11 +73,13 @@ def process_razorpay_provider_event(
         envelope = parse_stored_envelope(event.get("event_data"))
         merchant = store.get_merchant_by_razorpay_account_id(envelope.account_id)
         if merchant is None:
-            store.update_provider_event(
-                event_id,
+            if not update_event(
                 processing_state="unresolved",
                 failure_reason="No merchant mapping for Razorpay account ID.",
-            )
+            ):
+                return {"status": "fenced", "event_id": event_id}
+            if not complete_job():
+                return {"status": "fenced", "event_id": event_id}
             return {"status": "unresolved", "event_id": event_id}
 
         normalized = normalize_with_enrichment(
@@ -73,11 +93,13 @@ def process_razorpay_provider_event(
             merchant,
             schedule_graph or run_provider_chargeback_graph,
         )
-        store.update_provider_event(
-            event_id,
+        if not update_event(
             processing_state=result["status"],
             merchant_id=merchant["merchant_id"],
-        )
+        ):
+            return {"status": "fenced", "event_id": event_id}
+        if not complete_job():
+            return {"status": "fenced", "event_id": event_id}
         return {"event_id": event_id, **result}
     except Exception as exc:
         failure_reason = safe_razorpay_failure_reason(exc)
@@ -89,9 +111,12 @@ def process_razorpay_provider_event(
                 "failure_type": type(exc).__name__,
             },
         )
-        store.update_provider_event(
-            event_id,
-            processing_state="failed",
-            failure_reason=failure_reason,
-        )
+        if lease_token:
+            retry_state = store.retry_provider_event_job(
+                event_id,
+                lease_token=lease_token,
+                failure_reason=failure_reason,
+            )
+            return {"status": retry_state or "fenced", "event_id": event_id}
+        store.update_provider_event(event_id, processing_state="failed", failure_reason=failure_reason)
         return {"status": "failed", "event_id": event_id}

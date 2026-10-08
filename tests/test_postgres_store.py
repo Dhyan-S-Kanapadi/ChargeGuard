@@ -17,6 +17,14 @@ def process_claim(database_url):
         {"event_id": "event_cross_process", "provider": "razorpay", "payload_hash": "same"})
 
 
+def process_job_claim(database_url):
+    return bool(
+        PostgresStore(database_url, environment="test").claim_next_provider_event_job(
+            provider="razorpay"
+        )
+    )
+
+
 @pytest.fixture
 def pg(monkeypatch):
     url = os.getenv("CHARGEGUARD_TEST_DATABASE_URL")
@@ -69,6 +77,29 @@ def test_concurrent_duplicate_and_processing_claims(pg):
     with ThreadPoolExecutor(max_workers=8) as pool:
         assert sum(pool.map(lambda _: pg.start_provider_event_processing("event_a"), range(16))) == 1
     assert pg.get_provider_event("event_a")["attempt_count"] == 1
+
+
+def test_durable_job_is_atomic_and_claimed_once_across_processes(pg, monkeypatch):
+    event = {"event_id": "event_job", "provider": "razorpay", "payload_hash": "hash_job"}
+    original = pg._persist_changes
+
+    def fail_after_write(connection, before, after):
+        original(connection, before, after)
+        raise RuntimeError("injected job transaction failure")
+
+    monkeypatch.setattr(pg, "_persist_changes", fail_after_write)
+    with pytest.raises(RuntimeError, match="injected job transaction failure"):
+        pg.claim_and_enqueue_provider_event(event)
+    assert pg.get_provider_event("event_job") is None
+    assert pg.list_provider_event_jobs() == []
+
+    monkeypatch.setattr(pg, "_persist_changes", original)
+    assert pg.claim_and_enqueue_provider_event(event)
+    with pytest.raises(StoreConflictError):
+        pg.claim_and_enqueue_provider_event({**event, "payload_hash": "different"})
+    with ProcessPoolExecutor(max_workers=3) as pool:
+        assert sum(pool.map(process_job_claim, [pg.database_url] * 6)) == 1
+    assert pg.list_provider_event_jobs()[0]["job_state"] == "processing"
 
 
 def test_relational_ownership_and_identifier_conflicts(pg):

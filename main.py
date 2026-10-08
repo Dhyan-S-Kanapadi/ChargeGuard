@@ -70,7 +70,10 @@ def _log_deployment_warnings() -> None:
     }:
         logger.warning("Global SEON credential fallback is enabled in production.")
     if hasattr(store, "check_ready"):
-        logger.warning("PostgreSQL is configured; managed credentials and durable jobs are still required before multi-worker deployment.")
+        logger.warning(
+            "PostgreSQL is configured; run the dedicated Razorpay worker and complete "
+            "managed-credential, artifact, and production-validation blockers before launch."
+        )
     else:
         logger.warning(
             "The synchronized storage supports one application process only, including "
