@@ -1,28 +1,27 @@
 import json
 import logging
 import re
-from pathlib import Path
 from typing import Any
 
 from core.state import ChargebackState
+from integrations.artifact_storage import (
+    ArtifactIntegrityError,
+    ArtifactMissingError,
+    ArtifactStorageError,
+    artifact_storage,
+)
 
 
 logger = logging.getLogger(__name__)
 
 
-def _sidecar_path(pdf_path: Path) -> Path:
-    return pdf_path.with_suffix(".json")
-
-
 QualityRejection = tuple[str, dict[str, Any], bool]
 
 
-def _load_rebuttal_packet(pdf_path: Path) -> tuple[dict[str, Any] | None, QualityRejection | None]:
+def _load_rebuttal_packet(content: bytes) -> tuple[dict[str, Any] | None, QualityRejection | None]:
     try:
-        return json.loads(_sidecar_path(pdf_path).read_text(encoding="utf-8")), None
-    except FileNotFoundError:
-        return None, ("missing_rebuttal_sidecar", {}, True)
-    except json.JSONDecodeError:
+        return json.loads(content.decode("utf-8")), None
+    except (UnicodeDecodeError, json.JSONDecodeError):
         return None, ("invalid_rebuttal_sidecar", {}, True)
 
 
@@ -93,16 +92,25 @@ def quality_check_agent(state: ChargebackState) -> ChargebackState:
         return _reject(state, ("quality_attempt_limit_reached", {}, False))
     state["quality_loop_count"] = state.get("quality_loop_count", 0) + 1
 
-    path_value = state.get("rebuttal_document_path")
-    if not path_value:
+    artifact_id = state.get("rebuttal_artifact_id")
+    facts_artifact_id = state.get("rebuttal_facts_artifact_id")
+    if not artifact_id or not facts_artifact_id:
         return _reject(state, ("missing_rebuttal_document", {}, True))
-
-    pdf_path = Path(path_value)
+    from api.store import store
+    merchant_id = state["merchant_profile"]["merchant_id"]
+    pdf_artifact = store.get_case_artifact(merchant_id, state["chargeback_id"], artifact_id)
+    facts_artifact = store.get_case_artifact(merchant_id, state["chargeback_id"], facts_artifact_id)
+    if not pdf_artifact or not facts_artifact:
+        return _reject(state, ("missing_rebuttal_document", {}, True))
     try:
-        content = pdf_path.read_bytes()
-    except FileNotFoundError:
+        storage = artifact_storage()
+        content = storage.read_verified(pdf_artifact["object_key"], pdf_artifact["sha256"])
+        facts_content = storage.read_verified(facts_artifact["object_key"], facts_artifact["sha256"])
+    except ArtifactIntegrityError:
+        return _reject(state, ("artifact_checksum_mismatch", {}, False))
+    except (ArtifactMissingError, ArtifactStorageError):
         return _reject(state, ("missing_rebuttal_document", {}, True))
-    if pdf_path.suffix.lower() != ".pdf" or not content.startswith(b"%PDF-"):
+    if pdf_artifact["content_type"] != "application/pdf" or not content.startswith(b"%PDF-"):
         return _reject(state, ("invalid_rebuttal_document", {}, True))
 
     page_limit = 15 if state["card_network"] == "MASTERCARD" else 10
@@ -112,7 +120,7 @@ def quality_check_agent(state: ChargebackState) -> ChargebackState:
             ("exceeds_page_limit", {"page_limit": page_limit}, True),
         )
 
-    packet, load_rejection = _load_rebuttal_packet(pdf_path)
+    packet, load_rejection = _load_rebuttal_packet(facts_content)
     if load_rejection or packet is None:
         return _reject(
             state,
@@ -122,8 +130,16 @@ def quality_check_agent(state: ChargebackState) -> ChargebackState:
     rejection = _packet_rejection_reason(state, packet)
     if rejection:
         return _reject(state, rejection)
-    state["quality_approved"] = True
-    state["quality_rejection_reason"] = None
-    state["quality_rejection_details"] = {}
-    state["quality_auto_fixable"] = True
+    approved_state = dict(state)
+    approved_state["quality_approved"] = True
+    approved_state["quality_rejection_reason"] = None
+    approved_state["quality_rejection_details"] = {}
+    approved_state["quality_auto_fixable"] = True
+    persisted_state = store.approve_rebuttal_artifacts(
+        merchant_id, state["chargeback_id"], approved_state, [artifact_id, facts_artifact_id]
+    )
+    if persisted_state is None:
+        return _reject(state, ("artifact_finalization_failed", {}, False))
+    state.clear()
+    state.update(persisted_state)
     return state

@@ -19,6 +19,7 @@ from db.postgres import StoreConflictError
 from api.demo_bootstrap import seed_demo_merchant
 from api.public_demo import router as public_demo_router, validate_public_demo
 from api.disputes import router as disputes_router
+from api.artifacts import router as artifacts_router
 from api.device_risk_connectors import router as device_risk_connectors_router
 from api.consortium_connectors import router as consortium_connectors_router
 from api.merchants import router as merchants_router
@@ -38,6 +39,7 @@ from api.stats import router as stats_router
 from api.webhooks import router as webhooks_router
 from api.store import store
 from ml.model import WinProbabilityModel
+from integrations.artifact_storage import artifact_storage
 
 
 logger = logging.getLogger(__name__)
@@ -87,6 +89,11 @@ def _log_deployment_warnings() -> None:
 async def _lifespan(_: FastAPI):
     validate_runtime_environment()
     validate_identity_configuration()
+    # Production has no configured provider yet and must refuse startup.  Other
+    # non-development profiles remain healthy, while artifact operations still
+    # fail closed at their storage boundary.
+    if runtime_environment() == "production":
+        artifact_storage()
     if hasattr(store, "check_ready"):
         store.check_ready()
     _log_deployment_warnings()
@@ -146,6 +153,7 @@ async def validation_exception_handler(
 app.include_router(webhooks_router)
 app.include_router(identity_router)
 app.include_router(disputes_router)
+app.include_router(artifacts_router)
 app.include_router(merchants_router)
 app.include_router(orders_router)
 app.include_router(payment_connectors_router)

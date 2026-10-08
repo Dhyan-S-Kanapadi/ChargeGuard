@@ -1,7 +1,9 @@
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
+import secrets
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -111,6 +113,9 @@ class InMemoryStore:
         self._device_risk_connector_audit: list[dict[str, Any]] = []
         self._orders: dict[str, OrderRecord] = {}
         self._disputes: dict[str, dict[str, Any]] = {}
+        self._artifacts: dict[str, dict[str, Any]] = {}
+        self._artifact_download_grants: dict[str, dict[str, Any]] = {}
+        self._artifact_access_audit: list[dict[str, Any]] = []
         self._provider_events: dict[str, dict[str, Any]] = {}
         self._provider_event_jobs: dict[str, dict[str, Any]] = {}
         self._simulator_disputes: dict[str, dict[str, Any]] = {}
@@ -135,6 +140,9 @@ class InMemoryStore:
             self._device_risk_connector_audit.clear()
             self._orders.clear()
             self._disputes.clear()
+            self._artifacts.clear()
+            self._artifact_download_grants.clear()
+            self._artifact_access_audit.clear()
             self._provider_events.clear()
             self._provider_event_jobs.clear()
             self._simulator_disputes.clear()
@@ -1375,6 +1383,195 @@ class InMemoryStore:
             records = [deepcopy(record) for record in self._disputes.values()]
         return sorted(records, key=lambda record: record["created_at"], reverse=True)
 
+    def create_artifact(self, artifact: dict[str, Any]) -> bool:
+        """Persist immutable object metadata after storage has verified its bytes."""
+        artifact_id = str(artifact["artifact_id"])
+        merchant_id = str(artifact["merchant_id"])
+        chargeback_id = str(artifact["chargeback_id"])
+        with self._lock:
+            dispute = self._disputes.get(chargeback_id)
+            if (
+                artifact_id in self._artifacts
+                or dispute is None
+                or dispute["state"].get("merchant_profile", {}).get("merchant_id") != merchant_id
+            ):
+                return False
+            record = deepcopy(artifact)
+            record.setdefault("created_at", datetime.now(timezone.utc))
+            record.setdefault("immutable_at", None)
+            record.setdefault("retention_marked_at", None)
+            record.setdefault("retention_reason", None)
+            self._artifacts[artifact_id] = record
+            self._save()
+            return True
+
+    def attach_rebuttal_artifacts(
+        self,
+        merchant_id: str,
+        chargeback_id: str,
+        state: ChargebackState,
+        artifacts: list[dict[str, Any]],
+    ) -> ChargebackState | None:
+        """Atomically attach generated rebuttal metadata and dispute references."""
+        with self._lock:
+            dispute = self._disputes.get(chargeback_id)
+            ids = {artifact.get("artifact_id") for artifact in artifacts}
+            expected_ids = {
+                state.get("rebuttal_artifact_id"),
+                state.get("rebuttal_facts_artifact_id"),
+            }
+            if (
+                dispute is None
+                or dispute["state"].get("merchant_profile", {}).get("merchant_id") != merchant_id
+                or len(artifacts) != 2
+                or None in ids
+                or ids != expected_ids
+                or any(
+                    artifact["artifact_id"] in self._artifacts
+                    or artifact.get("merchant_id") != merchant_id
+                    or artifact.get("chargeback_id") != chargeback_id
+                    for artifact in artifacts
+                )
+            ):
+                return None
+            artifacts_before = deepcopy(self._artifacts)
+            dispute_before = deepcopy(dispute)
+            try:
+                for artifact in artifacts:
+                    record = deepcopy(artifact)
+                    record.setdefault("created_at", datetime.now(timezone.utc))
+                    record.setdefault("immutable_at", None)
+                    record.setdefault("retention_marked_at", None)
+                    record.setdefault("retention_reason", None)
+                    self._artifacts[record["artifact_id"]] = record
+                dispute["state"] = deepcopy(state)
+                dispute["updated_at"] = datetime.now(timezone.utc)
+                self._save()
+            except Exception:
+                self._artifacts = artifacts_before
+                self._disputes[chargeback_id] = dispute_before
+                raise
+            return deepcopy(dispute["state"])
+
+    def get_artifact(self, artifact_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            artifact = self._artifacts.get(artifact_id)
+            return deepcopy(artifact) if artifact else None
+
+    def get_case_artifact(
+        self, merchant_id: str, chargeback_id: str, artifact_id: str
+    ) -> dict[str, Any] | None:
+        artifact = self.get_artifact(artifact_id)
+        if not artifact or artifact["merchant_id"] != merchant_id or artifact["chargeback_id"] != chargeback_id:
+            return None
+        return artifact
+
+    def finalize_artifacts(self, merchant_id: str, chargeback_id: str, artifact_ids: list[str]) -> bool:
+        with self._lock:
+            artifacts = [self._artifacts.get(artifact_id) for artifact_id in artifact_ids]
+            if not artifacts or any(
+                artifact is None
+                or artifact["merchant_id"] != merchant_id
+                or artifact["chargeback_id"] != chargeback_id
+                for artifact in artifacts
+            ):
+                return False
+            now = datetime.now(timezone.utc)
+            for artifact in artifacts:
+                artifact["immutable_at"] = artifact.get("immutable_at") or now
+            self._save()
+            return True
+
+    def approve_rebuttal_artifacts(
+        self,
+        merchant_id: str,
+        chargeback_id: str,
+        state: ChargebackState,
+        artifact_ids: list[str],
+    ) -> ChargebackState | None:
+        """Atomically finalize filing artifacts and persist quality approval."""
+        with self._lock:
+            dispute = self._disputes.get(chargeback_id)
+            artifacts = [self._artifacts.get(artifact_id) for artifact_id in artifact_ids]
+            if (
+                dispute is None
+                or dispute["state"].get("merchant_profile", {}).get("merchant_id") != merchant_id
+                or not artifacts
+                or any(
+                    artifact is None
+                    or artifact["merchant_id"] != merchant_id
+                    or artifact["chargeback_id"] != chargeback_id
+                    for artifact in artifacts
+                )
+            ):
+                return None
+            artifacts_before = deepcopy(self._artifacts)
+            dispute_before = deepcopy(dispute)
+            try:
+                now = datetime.now(timezone.utc)
+                for artifact in artifacts:
+                    artifact["immutable_at"] = artifact.get("immutable_at") or now
+                dispute["state"] = deepcopy(state)
+                dispute["updated_at"] = now
+                self._save()
+            except Exception:
+                self._artifacts = artifacts_before
+                self._disputes[chargeback_id] = dispute_before
+                raise
+            return deepcopy(dispute["state"])
+
+    def mark_artifact_retention(
+        self, merchant_id: str, chargeback_id: str, artifact_id: str, reason: str
+    ) -> bool:
+        with self._lock:
+            artifact = self._artifacts.get(artifact_id)
+            if not artifact or artifact["merchant_id"] != merchant_id or artifact["chargeback_id"] != chargeback_id:
+                return False
+            artifact["retention_marked_at"] = artifact.get("retention_marked_at") or datetime.now(timezone.utc)
+            artifact["retention_reason"] = reason
+            self._save()
+            return True
+
+    def create_artifact_download_grant(
+        self, merchant_id: str, chargeback_id: str, artifact_id: str, actor_id: str, expires_at: datetime
+    ) -> tuple[str, str, dict[str, Any]] | None:
+        artifact = self.get_case_artifact(merchant_id, chargeback_id, artifact_id)
+        if artifact is None:
+            return None
+        token = uuid4().hex + uuid4().hex
+        grant_id = uuid4().hex
+        with self._lock:
+            self._artifact_download_grants[grant_id] = {
+                "grant_id": grant_id, "artifact_id": artifact_id, "merchant_id": merchant_id,
+                "chargeback_id": chargeback_id, "actor_id": actor_id,
+                "token_sha256": hashlib.sha256(token.encode()).hexdigest(), "expires_at": expires_at,
+                "used_at": None, "created_at": datetime.now(timezone.utc),
+            }
+            self._artifact_access_audit.append({"artifact_id": artifact_id, "merchant_id": merchant_id,
+                                                "actor_id": actor_id, "action": "download_granted",
+                                                "created_at": datetime.now(timezone.utc)})
+            self._save()
+        return grant_id, token, deepcopy(artifact)
+
+    def redeem_artifact_download_grant(self, grant_id: str, token: str, merchant_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            grant = self._artifact_download_grants.get(grant_id)
+            if (
+                not grant or grant["merchant_id"] != merchant_id or grant["used_at"] is not None
+                or grant["expires_at"] <= datetime.now(timezone.utc)
+                or not secrets.compare_digest(grant["token_sha256"], hashlib.sha256(token.encode()).hexdigest())
+            ):
+                return None
+            artifact = self._artifacts.get(grant["artifact_id"])
+            if artifact is None:
+                return None
+            grant["used_at"] = datetime.now(timezone.utc)
+            self._artifact_access_audit.append({"artifact_id": artifact["artifact_id"], "merchant_id": merchant_id,
+                                                "actor_id": grant["actor_id"], "action": "download_redeemed",
+                                                "created_at": grant["used_at"]})
+            self._save()
+            return deepcopy(artifact)
+
     def claim_provider_event(self, event: dict[str, Any]) -> bool:
         """Atomically claim a provider event before any workflow scheduling."""
         event_id = str(event.get("event_id") or event.get("provider_event_id") or "")
@@ -1807,6 +2004,9 @@ class InMemoryStore:
         device_risk_connector_audit = payload.get("device_risk_connector_audit", [])
         orders = payload.get("orders", {})
         disputes = payload.get("disputes", {})
+        artifacts = payload.get("artifacts", {})
+        artifact_download_grants = payload.get("artifact_download_grants", {})
+        artifact_access_audit = payload.get("artifact_access_audit", [])
         if (
             not isinstance(merchants, dict)
             or not isinstance(payment_connectors, dict)
@@ -1821,6 +2021,9 @@ class InMemoryStore:
             or not isinstance(device_risk_connector_audit, list)
             or not isinstance(orders, dict)
             or not isinstance(disputes, dict)
+            or not isinstance(artifacts, dict)
+            or not isinstance(artifact_download_grants, dict)
+            or not isinstance(artifact_access_audit, list)
         ):
             raise ValueError("Store file must contain valid merchant, connector, order, and dispute data.")
 
@@ -1847,6 +2050,9 @@ class InMemoryStore:
         self._device_risk_connectors = deepcopy(device_risk_connectors)
         self._device_risk_connector_audit = deepcopy(device_risk_connector_audit)
         self._disputes = deepcopy(disputes)
+        self._artifacts = deepcopy(artifacts)
+        self._artifact_download_grants = deepcopy(artifact_download_grants)
+        self._artifact_access_audit = deepcopy(artifact_access_audit)
         provider_events = payload.get("provider_events", {})
         provider_event_jobs = payload.get("provider_event_jobs", {})
         simulator_disputes = payload.get("simulator_disputes", {})
@@ -1897,6 +2103,9 @@ class InMemoryStore:
             "device_risk_connector_audit": self._device_risk_connector_audit,
             "orders": self._orders,
             "disputes": self._disputes,
+            "artifacts": self._artifacts,
+            "artifact_download_grants": self._artifact_download_grants,
+            "artifact_access_audit": self._artifact_access_audit,
             "provider_events": self._provider_events,
             "provider_event_jobs": self._provider_event_jobs,
             "simulator_disputes": self._simulator_disputes,

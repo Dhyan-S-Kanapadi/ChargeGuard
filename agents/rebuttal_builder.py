@@ -1,9 +1,10 @@
 import json
 import logging
-import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from core.state import ChargebackState
 from documents.pdf_builder import build_rebuttal_pdf
@@ -11,6 +12,7 @@ from integrations.rebuttal_narrative import (
     generate_rebuttal_narrative,
     rebuttal_narrative_enabled,
 )
+from integrations.artifact_storage import ArtifactStorageError, artifact_object_key, artifact_storage
 
 
 logger = logging.getLogger(__name__)
@@ -21,10 +23,6 @@ _PROHIBITED_REPLACEMENTS = {
     "merchant error": "documented transaction evidence",
     "we were at fault": "the merchant disputes the claim",
 }
-
-
-def _output_dir() -> Path:
-    return Path(os.getenv("REBUTTAL_OUTPUT_DIR", "./output/rebuttals"))
 
 
 def _evidence_status(state: ChargebackState) -> dict[str, bool]:
@@ -229,13 +227,8 @@ def _apply_quality_retry(packet: dict[str, Any], state: ChargebackState) -> dict
 
 
 def rebuttal_builder_agent(state: ChargebackState) -> ChargebackState:
-    """Build a deterministic PDF and structured fact sidecar."""
+    """Build a deterministic PDF and persist an immutable fact sidecar."""
     logger.info("Running rebuttal builder agent for %s", state["chargeback_id"])
-
-    output_dir = _output_dir()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    pdf_path = output_dir / f"{state['chargeback_id']}_rebuttal.pdf"
-    packet_path = pdf_path.with_suffix(".json")
 
     try:
         packet = _build_rebuttal_packet(state)
@@ -251,6 +244,8 @@ def rebuttal_builder_agent(state: ChargebackState) -> ChargebackState:
             },
         )
         state["rebuttal_document_path"] = None
+        state["rebuttal_artifact_id"] = None
+        state["rebuttal_facts_artifact_id"] = None
         state["rebuttal_build_error"] = "unsupported_card_network"
         return state
     if rebuttal_narrative_enabled() and not packet["ce3_qualified_transaction_data"]:
@@ -262,14 +257,66 @@ def rebuttal_builder_agent(state: ChargebackState) -> ChargebackState:
             packet["narrative_generated"] = True
         except Exception as exc:
             logger.warning("Rebuttal narrative generation failed for %s: %s", state["chargeback_id"], exc)
-    packet_path.write_text(
-        json.dumps(packet, default=str, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
     if state.get("quality_rejection_reason") == "prohibited_language_used":
         template_text = _replace_prohibited_language(template_text)
     elif state.get("quality_rejection_reason") == "exceeds_page_limit":
         template_text = template_text[:750]
-    build_rebuttal_pdf(packet, pdf_path, template_text=template_text)
-    state["rebuttal_document_path"] = str(pdf_path)
+    merchant_id = state["merchant_profile"]["merchant_id"]
+    chargeback_id = state["chargeback_id"]
+    from api.store import store
+    persisted_dispute = store.get_dispute(chargeback_id)
+    if (
+        persisted_dispute is None
+        or persisted_dispute["state"].get("merchant_profile", {}).get("merchant_id") != merchant_id
+    ):
+        raise RuntimeError("Rebuttal artifact persistence requires a stored merchant-owned dispute.")
+    storage = artifact_storage()
+    pdf_artifact_id, facts_artifact_id = uuid4().hex, uuid4().hex
+    with tempfile.TemporaryDirectory(prefix="chargeguard-rebuttal-") as temporary:
+        pdf_path = Path(temporary) / "rebuttal.pdf"
+        build_rebuttal_pdf(packet, pdf_path, template_text=template_text)
+        pdf = pdf_path.read_bytes()
+    facts = json.dumps(packet, default=str, indent=2, sort_keys=True).encode("utf-8")
+    stored = [
+        (pdf_artifact_id, "rebuttal_pdf", "application/pdf", "rebuttal.pdf", pdf),
+        (facts_artifact_id, "rebuttal_facts", "application/json", "rebuttal.json", facts),
+    ]
+    artifacts = []
+    try:
+        for artifact_id, artifact_type, content_type, filename, content in stored:
+            object_key = artifact_object_key(
+                merchant_id=merchant_id,
+                chargeback_id=chargeback_id,
+                artifact_id=artifact_id,
+                filename=filename,
+            )
+            persisted = storage.put_immutable(object_key, content)
+            artifacts.append({
+                "artifact_id": artifact_id,
+                "merchant_id": merchant_id,
+                "chargeback_id": chargeback_id,
+                "artifact_type": artifact_type,
+                "object_key": persisted.object_key,
+                "content_type": content_type,
+                "size_bytes": persisted.size_bytes,
+                "sha256": persisted.sha256,
+            })
+        next_state = dict(state)
+        next_state["rebuttal_document_path"] = None
+        next_state["rebuttal_artifact_id"] = pdf_artifact_id
+        next_state["rebuttal_facts_artifact_id"] = facts_artifact_id
+        persisted_state = store.attach_rebuttal_artifacts(
+            merchant_id, chargeback_id, next_state, artifacts
+        )
+        if persisted_state is None:
+            raise RuntimeError("Artifact metadata could not be persisted.")
+    except Exception:
+        for artifact in artifacts:
+            try:
+                storage.discard_uncommitted(artifact["object_key"], artifact["sha256"])
+            except ArtifactStorageError:
+                logger.exception("Unable to clean up uncommitted rebuttal artifact")
+        raise
+    state.clear()
+    state.update(persisted_state)
     return state

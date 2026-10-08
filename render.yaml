@@ -65,8 +65,6 @@ services:
         value: http://127.0.0.1:10000/webhook/razorpay
       - key: CHARGEGUARD_STORE_PATH
         value: /tmp/chargeguard/chargeguard_store.json
-      - key: REBUTTAL_OUTPUT_DIR
-        value: /tmp/chargeguard/rebuttals
       - key: MODEL_PATH
         value: /app/ml/artifacts/win_probability_model.pkl
       - key: PORTFOLIO_ASSISTANT_USE_STUBS

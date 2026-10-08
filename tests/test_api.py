@@ -229,7 +229,8 @@ def test_webhook_runs_graph_and_exposes_completed_dispute(configured_client: Tes
     assert detail["status"] == "completed"
     assert detail["state"]["decision"] == "FIGHT"
     assert detail["state"]["quality_approved"] is True
-    assert detail["state"]["rebuttal_document_path"].endswith(".pdf")
+    assert detail["state"]["rebuttal_document_path"] is None
+    assert detail["state"]["rebuttal_artifact_id"]
     assert detail["state"]["filing_confirmation"].startswith("filed_visa_cb_api_001_")
     assert detail["state"]["final_outcome"] is None
     assert detail["state"]["outcome_recorded_at"] is None

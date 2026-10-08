@@ -32,7 +32,7 @@ print(f\"  third_party_fraud:      {d.get('third_party_fraud_indicators')}\")
 print(f\"  identity_continuity:    {d.get('identity_continuity')}\")
 print(f\"  contradiction_summary:  {d.get('contradiction_summary')}\")
 print(f\"  final_outcome:          {d.get('final_outcome')}\")
-print(f\"  rebuttal_pdf:           {d.get('rebuttal_document_path')}\")
+print(f\"  private_rebuttal:       {'ready' if d.get('rebuttal_artifact_id') else 'not generated'}\")
 "
 }
 future_deadline() { python3 -c "from datetime import datetime,timezone,timedelta; print((datetime.now(timezone.utc)+timedelta(days=$1)).isoformat())"; }

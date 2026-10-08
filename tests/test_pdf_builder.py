@@ -1,10 +1,13 @@
 import json
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+
+import pytest
 
 from agents.rebuttal_builder import _build_rebuttal_packet, rebuttal_builder_agent
 from agents.quality_check import quality_check_agent
+from api.store import store
 from core.state import ChargebackState
+from integrations.artifact_storage import artifact_storage
 
 
 def _state() -> ChargebackState:
@@ -77,6 +80,18 @@ def _state() -> ChargebackState:
     }
 
 
+def _persist(state: ChargebackState) -> ChargebackState:
+    if store.get_dispute(state["chargeback_id"]) is None:
+        assert store.create_dispute(state)
+    return state
+
+
+def _artifact_content(state: ChargebackState, artifact_key: str) -> bytes:
+    artifact = store.get_artifact(state[artifact_key])
+    assert artifact is not None
+    return artifact_storage().read_verified(artifact["object_key"], artifact["sha256"])
+
+
 def test_rebuttal_packet_includes_status_sections_and_evidence() -> None:
     state = _state()
     state["contradiction_flags"] = [
@@ -103,17 +118,46 @@ def test_rebuttal_packet_includes_status_sections_and_evidence() -> None:
 def test_rebuttal_builder_writes_pdf_and_fact_sidecar(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(tmp_path))
 
-    result = rebuttal_builder_agent(_state())
+    result = rebuttal_builder_agent(_persist(_state()))
 
-    assert result["rebuttal_document_path"] is not None
-    path = Path(result["rebuttal_document_path"])
-    assert path.exists()
-    assert path.suffix == ".pdf"
-    assert path.read_bytes().startswith(b"%PDF-")
-    packet = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    assert result["rebuttal_document_path"] is None
+    assert result["rebuttal_artifact_id"]
+    assert _artifact_content(result, "rebuttal_artifact_id").startswith(b"%PDF-")
+    packet = json.loads(_artifact_content(result, "rebuttal_facts_artifact_id"))
     assert packet["chargeback_id"] == "cb_rebuttal_001"
     assert packet["sections"][0]["title"] == "Dispute summary"
     assert packet["narrative_generated"] is False
+
+
+def test_rebuttal_builder_requires_persisted_merchant_owned_dispute(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_ARTIFACT_LOCAL_DIR", str(tmp_path))
+    state = _state()
+    state["chargeback_id"] = "cb_unpersisted_artifact"
+
+    with pytest.raises(RuntimeError, match="stored merchant-owned dispute"):
+        rebuttal_builder_agent(state)
+
+    assert not list(tmp_path.rglob("*"))
+
+
+def test_rebuttal_builder_cleans_uncommitted_objects_when_metadata_write_fails(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CHARGEGUARD_ARTIFACT_LOCAL_DIR", str(tmp_path))
+    state = _state()
+    state["chargeback_id"] = "cb_artifact_metadata_failure"
+    state = _persist(state)
+    record_before = store.get_dispute(state["chargeback_id"])
+    assert record_before is not None
+
+    monkeypatch.setattr(store, "attach_rebuttal_artifacts", lambda *args: None)
+    with pytest.raises(RuntimeError, match="metadata could not be persisted"):
+        rebuttal_builder_agent(state)
+
+    assert not list(tmp_path.rglob("*.pdf"))
+    assert not list(tmp_path.rglob("*.json"))
+    record_after = store.get_dispute(state["chargeback_id"])
+    assert record_after is not None
+    assert record_after["state"].get("rebuttal_artifact_id") is None
+    assert record_after["state"].get("rebuttal_facts_artifact_id") is None
 
 
 def test_enabled_stubbed_narrative_is_first_packet_section(tmp_path, monkeypatch) -> None:
@@ -121,8 +165,8 @@ def test_enabled_stubbed_narrative_is_first_packet_section(tmp_path, monkeypatch
     monkeypatch.setenv("REBUTTAL_NARRATIVE_ENABLED", "true")
     monkeypatch.setenv("REBUTTAL_NARRATIVE_USE_STUBS", "true")
 
-    path = Path(rebuttal_builder_agent(_state())["rebuttal_document_path"])
-    packet = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    result = rebuttal_builder_agent(_persist(_state()))
+    packet = json.loads(_artifact_content(result, "rebuttal_facts_artifact_id"))
 
     assert packet["narrative_generated"] is True
     assert packet["sections"][0]["title"] == "Summary"
@@ -137,10 +181,11 @@ def test_narrative_failure_keeps_valid_deterministic_packet(tmp_path, monkeypatc
         raise RuntimeError("narrative service unavailable")
 
     monkeypatch.setattr("agents.rebuttal_builder.generate_rebuttal_narrative", fail_narrative)
-    path = Path(rebuttal_builder_agent(_state())["rebuttal_document_path"])
-    packet = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    result = rebuttal_builder_agent(_persist(_state()))
+    pdf = _artifact_content(result, "rebuttal_artifact_id")
+    packet = json.loads(_artifact_content(result, "rebuttal_facts_artifact_id"))
 
-    assert path.read_bytes().startswith(b"%PDF-")
+    assert pdf.startswith(b"%PDF-")
     assert packet["narrative_generated"] is False
     assert packet["sections"][0]["title"] == "Dispute summary"
 
@@ -152,7 +197,7 @@ def test_generated_narrative_prohibited_language_is_rejected(tmp_path, monkeypat
         "agents.rebuttal_builder.generate_rebuttal_narrative",
         lambda packet: "We accept liability because of merchant error.",
     )
-    state = _state()
+    state = _persist(_state())
     state["comms"] = {
         "emails": [],
         "support_tickets": [],
@@ -176,24 +221,26 @@ def test_rebuttal_pdf_is_deterministic(tmp_path, monkeypatch) -> None:
     second_dir = tmp_path / "second"
 
     monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(first_dir))
-    first_path = Path(rebuttal_builder_agent(_state())["rebuttal_document_path"])
+    first = rebuttal_builder_agent(_persist(_state()))
+    first_pdf = _artifact_content(first, "rebuttal_artifact_id")
     monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(second_dir))
-    second_path = Path(rebuttal_builder_agent(_state())["rebuttal_document_path"])
+    second = rebuttal_builder_agent(_persist(_state()))
+    second_pdf = _artifact_content(second, "rebuttal_artifact_id")
 
-    assert first_path.read_bytes() == second_path.read_bytes()
+    assert first_pdf == second_pdf
 
 
 def test_rebuttal_retry_removes_prohibited_language(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("REBUTTAL_OUTPUT_DIR", str(tmp_path))
-    state = _state()
+    state = _persist(_state())
     state["decision_reasoning"] = "We accept liability due to merchant error."
 
-    first_path = Path(rebuttal_builder_agent(state)["rebuttal_document_path"])
-    first_packet = first_path.with_suffix(".json").read_text(encoding="utf-8")
+    rebuttal_builder_agent(state)
+    first_packet = _artifact_content(state, "rebuttal_facts_artifact_id").decode("utf-8")
     state["quality_rejection_reason"] = "prohibited_language_used"
     state["quality_loop_count"] = 1
-    second_path = Path(rebuttal_builder_agent(state)["rebuttal_document_path"])
-    second_packet = second_path.with_suffix(".json").read_text(encoding="utf-8")
+    rebuttal_builder_agent(state)
+    second_packet = _artifact_content(state, "rebuttal_facts_artifact_id").decode("utf-8")
 
     assert second_packet != first_packet
     assert "we accept liability" not in second_packet.lower()

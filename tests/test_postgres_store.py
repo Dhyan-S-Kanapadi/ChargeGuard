@@ -6,8 +6,10 @@ from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 
 import pytest
+import psycopg
 
 from api.store import OrderIdentifierConflictError
+from db.migrate import connect
 from db.postgres import PostgresStore, StoreConflictError
 from db.migrate import migrate
 
@@ -112,6 +114,60 @@ def test_relational_ownership_and_identifier_conflicts(pg):
     assert pg.upsert_order(order("order_b", "merchant_b"))
     with pytest.raises(StoreConflictError):
         pg.upsert_order(order("order_x", "missing_merchant", "pay_other"))
+
+
+def test_private_artifact_migration_enforces_retention_and_immutability(pg):
+    assert pg.create_merchant(merchant())
+    state = case()
+    assert pg.create_dispute(state)
+    artifact = {
+        "artifact_id": "evidence_attachment_a",
+        "merchant_id": "merchant_a",
+        "chargeback_id": "dispute_a",
+        "artifact_type": "evidence_attachment",
+        "object_key": "merchants/merchant_a/cases/dispute_a/artifacts/evidence_attachment_a/evidence.pdf",
+        "content_type": "application/pdf",
+        "size_bytes": 1,
+        "sha256": "a" * 64,
+    }
+    assert pg.create_artifact(artifact)
+    assert pg.finalize_artifacts("merchant_a", "dispute_a", [artifact["artifact_id"]])
+
+    with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
+        with connect(pg.database_url) as connection:
+            connection.execute("UPDATE artifacts SET object_key=%s WHERE artifact_id=%s", (
+                "merchants/merchant_a/cases/dispute_a/artifacts/evidence_attachment_a/replaced.pdf",
+                artifact["artifact_id"],
+            ))
+    with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
+        with connect(pg.database_url) as connection:
+            connection.execute("DELETE FROM artifacts WHERE artifact_id=%s", (artifact["artifact_id"],))
+
+
+def test_artifact_attach_is_atomic_with_dispute_references(pg, monkeypatch):
+    assert pg.create_merchant(merchant())
+    state = case()
+    assert pg.create_dispute(state)
+    state["rebuttal_artifact_id"] = "rebuttal_a"
+    state["rebuttal_facts_artifact_id"] = "facts_a"
+    artifacts = [
+        {"artifact_id": "rebuttal_a", "merchant_id": "merchant_a", "chargeback_id": "dispute_a",
+         "artifact_type": "rebuttal_pdf", "object_key": "merchants/merchant_a/cases/dispute_a/artifacts/rebuttal_a/rebuttal.pdf",
+         "content_type": "application/pdf", "size_bytes": 1, "sha256": "a" * 64},
+        {"artifact_id": "facts_a", "merchant_id": "merchant_a", "chargeback_id": "dispute_a",
+         "artifact_type": "rebuttal_facts", "object_key": "merchants/merchant_a/cases/dispute_a/artifacts/facts_a/rebuttal.json",
+         "content_type": "application/json", "size_bytes": 1, "sha256": "b" * 64},
+    ]
+    monkeypatch.setattr(pg, "_persist_changes", lambda *args: (_ for _ in ()).throw(RuntimeError("injected failure")))
+
+    with pytest.raises(RuntimeError, match="injected failure"):
+        pg.attach_rebuttal_artifacts("merchant_a", "dispute_a", state, artifacts)
+
+    assert pg.get_artifact("rebuttal_a") is None
+    assert pg.get_artifact("facts_a") is None
+    persisted = pg.get_dispute("dispute_a")
+    assert persisted is not None
+    assert persisted["state"].get("rebuttal_artifact_id") is None
 
 
 def test_consortium_connector_lifecycle_persists_and_enforces_ownership(pg):

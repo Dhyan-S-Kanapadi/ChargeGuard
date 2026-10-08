@@ -324,7 +324,7 @@ function renderCase(detail) {
     ${detail.human_review_summary ? `<div class="flag" style="border-left-color:#8b94a3;background:rgba(139,148,163,0.1);"><div class="label" style="color:#8b94a3;">Reviewer Summary</div>${detail.human_review_summary}</div>` : ""}
     <div class="case-foot">
       <span>${s.final_outcome ? "Outcome: " + s.final_outcome : (s.filing_confirmation || "in progress")}</span>
-      ${s.rebuttal_document_path ? `<a href="#" onclick="alert('PDF at: ${s.rebuttal_document_path}'); return false;">View rebuttal PDF path</a>` : ""}
+      ${s.rebuttal_artifact_id ? `<span>Private rebuttal artifact ready</span>` : ""}
     </div>
   </div>`;
 }

@@ -53,7 +53,7 @@ def main() -> None:
                     print(f"Win probability: {state.get('win_probability')}")
                     print(f"Expected value: {state.get('expected_value')}")
                     print(f"Evidence degraded: {state.get('evidence_collection_degraded')}")
-                    print(f"Rebuttal path: {state.get('rebuttal_document_path')}")
+                    print(f"Private rebuttal artifact: {'ready' if state.get('rebuttal_artifact_id') else 'not generated'}")
                     print(f"Filing confirmation: {state.get('filing_confirmation')}")
                     break
             time.sleep(1)

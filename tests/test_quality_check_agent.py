@@ -1,10 +1,15 @@
 import json
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
+
+import pytest
 
 from agents.quality_check import quality_check_agent
+from api.store import store
 from core.graph import route_quality
 from core.state import ChargebackState
 from documents.pdf_builder import build_rebuttal_pdf
+from integrations.artifact_storage import artifact_object_key, artifact_storage
 
 
 def _state() -> ChargebackState:
@@ -71,33 +76,61 @@ def _packet() -> dict:
     }
 
 
-def _write_artifacts(tmp_path, packet: dict):
+def _write_artifacts(tmp_path, state: ChargebackState, packet: dict):
     pdf_path = tmp_path / "rebuttal.pdf"
     build_rebuttal_pdf(packet, pdf_path, template_text="Factual representment.")
-    pdf_path.with_suffix(".json").write_text(
-        json.dumps(packet), encoding="utf-8"
-    )
-    return pdf_path
+    if store.get_dispute(state["chargeback_id"]) is None:
+        assert store.create_dispute(state)
+    merchant_id = state["merchant_profile"]["merchant_id"]
+    for field, artifact_type, content_type, filename, content in (
+        ("rebuttal_artifact_id", "rebuttal_pdf", "application/pdf", "rebuttal.pdf", pdf_path.read_bytes()),
+        ("rebuttal_facts_artifact_id", "rebuttal_facts", "application/json", "rebuttal.json", json.dumps(packet).encode()),
+    ):
+        artifact_id = uuid4().hex
+        state[field] = artifact_id
+        key = artifact_object_key(merchant_id=merchant_id, chargeback_id=state["chargeback_id"], artifact_id=artifact_id, filename=filename)
+        saved = artifact_storage().put_immutable(key, content)
+        assert store.create_artifact({"artifact_id": artifact_id, "merchant_id": merchant_id,
+                                      "chargeback_id": state["chargeback_id"], "artifact_type": artifact_type,
+                                      "object_key": saved.object_key, "content_type": content_type,
+                                      "size_bytes": saved.size_bytes, "sha256": saved.sha256})
 
 
 def test_quality_check_approves_valid_rebuttal_pdf(tmp_path) -> None:
-    path = _write_artifacts(tmp_path, _packet())
     state = _state()
-    state["rebuttal_document_path"] = str(path)
+    _write_artifacts(tmp_path, state, _packet())
 
     result = quality_check_agent(state)
 
     assert result["quality_approved"] is True
     assert result["quality_rejection_reason"] is None
     assert result["quality_loop_count"] == 1
+    persisted = store.get_dispute(state["chargeback_id"])
+    assert persisted is not None
+    assert persisted["state"]["quality_approved"] is True
+    assert store.get_artifact(state["rebuttal_artifact_id"])["immutable_at"] is not None
+
+
+def test_quality_approval_rolls_back_finalization_when_dispute_save_fails(tmp_path, monkeypatch) -> None:
+    state = _state()
+    state["chargeback_id"] = "cb_quality_save_failure"
+    packet = _packet()
+    packet["chargeback_id"] = state["chargeback_id"]
+    _write_artifacts(tmp_path, state, packet)
+    monkeypatch.setattr(store, "_save", lambda: (_ for _ in ()).throw(OSError("disk unavailable")))
+
+    with pytest.raises(OSError, match="disk unavailable"):
+        quality_check_agent(state)
+
+    assert store.get_artifact(state["rebuttal_artifact_id"])["immutable_at"] is None
+    assert store.get_dispute(state["chargeback_id"])["state"]["quality_approved"] is False
 
 
 def test_quality_check_rejects_missing_required_evidence(tmp_path) -> None:
     packet = _packet()
     packet["evidence_status"]["shipping"] = False
-    path = _write_artifacts(tmp_path, packet)
     state = _state()
-    state["rebuttal_document_path"] = str(path)
+    _write_artifacts(tmp_path, state, packet)
 
     result = quality_check_agent(state)
 
@@ -109,15 +142,19 @@ def test_quality_check_rejects_missing_required_evidence(tmp_path) -> None:
 
 
 def test_quality_check_rejects_non_pdf_document(tmp_path) -> None:
-    path = tmp_path / "rebuttal.json"
-    path.write_text("{}", encoding="utf-8")
     state = _state()
-    state["rebuttal_document_path"] = str(path)
+    packet = _packet()
+    _write_artifacts(tmp_path, state, packet)
+    artifact = store.get_artifact(state["rebuttal_artifact_id"])
+    assert artifact
+    # Metadata says PDF, but the stored bytes are invalid.
+    from pathlib import Path
+    Path(artifact_storage().root / artifact["object_key"]).write_bytes(b"not a pdf")
 
     result = quality_check_agent(state)
 
     assert result["quality_approved"] is False
-    assert result["quality_rejection_reason"] == "invalid_rebuttal_document"
+    assert result["quality_rejection_reason"] == "artifact_checksum_mismatch"
 
 
 def test_quality_check_enforces_three_attempt_limit() -> None:

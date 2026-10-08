@@ -177,8 +177,7 @@ def main() -> int:
         _require_decision(escalate, "ESCALATE_DEGRADED")
         _print_result(escalate)
 
-        pdf_path = fight["state"].get("rebuttal_document_path")
-        print(f"\nFIGHT rebuttal PDF: {pdf_path or 'not generated'}")
+        print(f"\nFIGHT private rebuttal artifact: {'ready' if fight['state'].get('rebuttal_artifact_id') else 'not generated'}")
         print(f"Dashboard: {BASE_URL}/dashboard/")
         print("Demo completed: FIGHT, ACCEPT, and ESCALATE_DEGRADED all passed.")
         return 0

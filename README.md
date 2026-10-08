@@ -405,7 +405,8 @@ Core:
 | `ANTHROPIC_API_KEY` | Claude API key for rebuttal and vision tasks. |
 | `LANGSMITH_API_KEY` | LangSmith tracing key. |
 | `LANGSMITH_PROJECT` | LangSmith project name. |
-| `REBUTTAL_OUTPUT_DIR` | Directory for generated rebuttal PDFs. |
+| `CHARGEGUARD_ARTIFACT_LOCAL_DIR` | Development/test-only private filesystem root for generated rebuttal artifacts. |
+| `ARTIFACT_DOWNLOAD_TTL_SECONDS` | Bounded (60–600 seconds) lifetime for one-time authorized artifact downloads. |
 
 ML:
 
@@ -739,11 +740,17 @@ or submit a response.
 
 ## Generated Outputs
 
-Rebuttal PDFs are written to:
+In development and test only, rebuttal PDFs and fact sidecars are written as
+tenant- and case-scoped immutable artifacts beneath:
 
 ```text
-./output/rebuttals
+./output/artifacts
 ```
+
+Production startup fails closed until an approved private object-storage provider
+and managed credential backend are implemented. Artifact bytes are never exposed
+through a filesystem-path API; downloads require case authorization, the
+internal raw-evidence token, and a short-lived one-time grant.
 
 Learning artifacts are written under:
 

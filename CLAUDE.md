@@ -383,7 +383,7 @@ Current configuration groups are:
 | Provider mode | `CHARGEGUARD_USE_STUBS` and each provider's `*_USE_STUBS` override |
 | Provider connectors | `CHARGEGUARD_CREDENTIAL_ENCRYPTION_KEY`, `CHARGEGUARD_CREDENTIAL_STORE_PATH`, payment and SEON fallback flags |
 | Razorpay | Deprecated fallback REST credentials, webhook controls, claim timeout, startup recovery, and simulator controls |
-| Persistence/output | `CHARGEGUARD_STORE_PATH`, encrypted credential-store path, `REBUTTAL_OUTPUT_DIR` |
+| Persistence/output | `CHARGEGUARD_STORE_PATH`, encrypted credential-store path, `CHARGEGUARD_ARTIFACT_LOCAL_DIR` (development/test only) |
 | ML/feedback | model, outcome, metadata, playbook-stat paths, retraining threshold, and synthetic-data decay |
 | Decision economics | response costs, FX rates, and `FIGHT_EV_THRESHOLD` |
 | Evidence providers | Stripe, Shiprocket, Delhivery, Freshdesk, Gmail, SEON, Ethoca, Verifi, and food-platform settings |
@@ -738,11 +738,11 @@ Do not describe these items as already implemented.
 - Confirm model artifact, card rail, card network, network reason code, playbook, order ID, and response deadline.
 - UPI and unsupported/missing card playbooks are intentionally human-reviewed.
 
-### PDF path looks malformed in a browser alert
+### Rebuttal artifact cannot be downloaded
 
-- Read `rebuttal_document_path` from the JSON response.
-- Treat it as a filesystem path relative to `REBUTTAL_OUTPUT_DIR`.
-- Do not reconstruct it from line-wrapped alert text.
+- Rebuttal bytes are private artifacts; API responses never expose filesystem paths or object keys.
+- Request an authorized, short-lived download grant, then redeem it once with the grant token in the POST body.
+- In development and test, set `CHARGEGUARD_ARTIFACT_LOCAL_DIR`; production requires an approved object-storage and managed-secret configuration.
 
 ## Definition Of Done
 

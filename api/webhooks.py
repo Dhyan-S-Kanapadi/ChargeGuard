@@ -171,6 +171,8 @@ def build_initial_state(
         "decision": None,
         "decision_reasoning": None,
         "rebuttal_document_path": None,
+        "rebuttal_artifact_id": None,
+        "rebuttal_facts_artifact_id": None,
         "quality_approved": False,
         "quality_rejection_reason": None,
         "quality_loop_count": 0,
