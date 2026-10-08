@@ -133,13 +133,13 @@ def test_private_artifact_migration_enforces_retention_and_immutability(pg):
     assert pg.create_artifact(artifact)
     assert pg.finalize_artifacts("merchant_a", "dispute_a", [artifact["artifact_id"]])
 
-    with pytest.raises(psycopg.errors.RaiseException):
+    with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
         with connect(pg.database_url) as connection:
             connection.execute("UPDATE artifacts SET object_key=%s WHERE artifact_id=%s", (
                 "merchants/merchant_a/cases/dispute_a/artifacts/evidence_attachment_a/replaced.pdf",
                 artifact["artifact_id"],
             ))
-    with pytest.raises(psycopg.errors.RaiseException):
+    with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
         with connect(pg.database_url) as connection:
             connection.execute("DELETE FROM artifacts WHERE artifact_id=%s", (artifact["artifact_id"],))
 

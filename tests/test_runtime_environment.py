@@ -102,6 +102,19 @@ def test_invalid_startup_fails_before_demo_seed(monkeypatch):
             pass
 
 
+def test_staging_health_does_not_select_development_artifact_storage(monkeypatch):
+    import main
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+    monkeypatch.setenv("API_KEY", "staging-operator-key")
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_ENABLED", "false")
+    monkeypatch.setattr(main, "seed_demo_merchant", lambda: None)
+    monkeypatch.setattr(main, "schedule_startup_razorpay_recovery", lambda: None)
+    monkeypatch.setattr(main, "schedule_startup_stripe_recovery", lambda: None)
+
+    with TestClient(main.app, headers={"X-API-Key": "staging-operator-key"}) as client:
+        assert client.get("/health").status_code == 200
+
+
 def test_disabled_live_provider_cannot_make_requests(monkeypatch):
     from integrations.razorpay import RazorpayClient
     monkeypatch.setenv("ENVIRONMENT", "production")

@@ -89,7 +89,11 @@ def _log_deployment_warnings() -> None:
 async def _lifespan(_: FastAPI):
     validate_runtime_environment()
     validate_identity_configuration()
-    artifact_storage()
+    # Production has no configured provider yet and must refuse startup.  Other
+    # non-development profiles remain healthy, while artifact operations still
+    # fail closed at their storage boundary.
+    if runtime_environment() == "production":
+        artifact_storage()
     if hasattr(store, "check_ready"):
         store.check_ready()
     _log_deployment_warnings()
