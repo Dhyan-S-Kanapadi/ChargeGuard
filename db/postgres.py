@@ -31,6 +31,7 @@ TABLES = {
     "consortium_connectors": ("connector_id",),
     "device_risk_connectors": ("connector_id",), "orders": ("merchant_id", "order_id"),
     "disputes": ("chargeback_id",), "provider_events": ("event_id",),
+    "provider_event_jobs": ("event_id",),
     "simulator_disputes": ("dispute_id",),
     "payment_connector_audit": (), "shipping_connector_audit": (), "support_connector_audit": (),
     "consortium_connector_audit": (), "device_risk_connector_audit": (),
@@ -46,7 +47,8 @@ READS = frozenset({
     "get_order", "get_order_by_provider_payment_id", "get_order_by_provider_order_id",
     "get_order_by_commerce_order_number", "query_orders", "get_dispute", "list_disputes",
     "get_provider_event", "list_provider_events", "list_provider_events_for_dispute",
-    "list_recoverable_provider_events", "get_simulator_dispute", "list_simulator_disputes",
+    "list_recoverable_provider_events", "list_provider_event_jobs",
+    "get_simulator_dispute", "list_simulator_disputes",
 })
 WRITES = frozenset({
     "create_merchant", "update_merchant", "create_payment_connector", "activate_payment_connector",
@@ -59,7 +61,9 @@ WRITES = frozenset({
     "activate_device_risk_connector", "update_device_risk_connector_status", "disconnect_device_risk_connector",
     "upsert_order", "create_order", "mark_order_disputed", "create_dispute", "update_dispute",
     "claim_dispute_classification", "save_classification_suggestion", "reject_classification_suggestion",
-    "claim_provider_event", "queue_provider_event", "start_provider_event_processing",
+    "claim_provider_event", "claim_and_enqueue_provider_event", "queue_provider_event",
+    "enqueue_provider_event_job", "claim_next_provider_event_job", "start_provider_event_processing",
+    "complete_provider_event_job", "retry_provider_event_job", "update_provider_event_for_job",
     "requeue_provider_event", "update_provider_event", "create_simulator_dispute", "update_simulator_dispute",
 })
 JSON_COLUMNS = {"state", "event_data", "snapshot", "shipping_address"}
@@ -154,7 +158,7 @@ class PostgresStore:
                         raise StoreConflictError("Dispute changed; reload before applying this update.")
                     if supplied.get("merchant_profile", {}).get("merchant_id") != previous.get("merchant_profile", {}).get("merchant_id"):
                         raise StoreConflictError("Dispute merchant ownership cannot change.")
-                if name == "claim_provider_event":
+                if name in {"claim_provider_event", "claim_and_enqueue_provider_event"}:
                     event = args[0]
                     previous = domain._provider_events.get(event.get("event_id") or event.get("provider_event_id"))
                     if previous and any(event.get(key) != previous.get(key) for key in ("provider", "payload_hash", "account_id", "provider_dispute_id")):

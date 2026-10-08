@@ -7,7 +7,7 @@ Do not change the deployed demo's environment or point it at a production DB.
 
 This backend is implemented for staged testing, **not permission to launch**.
 PostgreSQL does not solve the outstanding identity, secret-manager, artifact,
-worker-fencing, financial-safety, approval and release-control tasks.
+financial-safety, approval and release-control tasks.
 
 ## Caller map and preserved contract
 
@@ -31,7 +31,7 @@ persisted identity before retrying; do not assume an error proves a rollback.
 | Orders, exact identifiers, disputed flag, history queries | order ingestion, Shopify sync, order correlation, purchase-history agent, simulator |
 | Dispute create/read/update | internal/provider webhooks, provider service, dispute APIs, public demo, stats/assistant, merchant analytics |
 | Classification suggestion/rejection/claim | `api/disputes.py`; existing suggestion/approval predicates preserved |
-| Provider-event claim/queue/start/requeue/status/recovery | signed receiver, processor, reconciliation, recovery/admin |
+| Provider-event claim/job lease/retry/status/recovery | signed receiver, Razorpay worker, reconciliation, recovery/admin |
 | Simulator fixture lifecycle | simulator, public demo, scenario lookup; forbidden for production DB writes |
 
 Typed columns persist merchant/order/connector identities and lifecycle fields.
@@ -45,8 +45,27 @@ rather than assuming storefront display numbers are globally unique.
 Dispute snapshots expose an internal `_store_version`; a stale state write fails
 instead of overwriting a newer snapshot. Callers must reload after a conflict.
 Provider-event reclaims reject changed identity/payload. The API maps conflicts
-to 409. This is **not worker fencing or exactly-once processing**; stage 6 must
-make acknowledgement/jobs atomic and prevent expired workers from committing.
+to 409. Razorpay's signed receiver transactionally creates a `provider_events`
+record and exactly one `provider_event_jobs` row. The PostgreSQL worker leases
+one due row, bounds exponential retries, recovers expired leases, and fences
+event/job completion with the lease token. It is at-least-once processing—not
+permission to treat downstream provider or graph side effects as exactly once.
+
+## Razorpay worker
+
+With PostgreSQL selected and migrations applied, run the API and this separate
+process against the same database:
+
+```text
+python -m api.razorpay_worker
+```
+
+It backfills recoverable Razorpay records written before it started, then polls
+the durable table. `PROVIDER_EVENT_MAX_ATTEMPTS` (default `5`),
+`PROVIDER_EVENT_RETRY_BASE_SECONDS` (default `5`, capped exponential delay),
+and `PROVIDER_EVENT_WORKER_POLL_SECONDS` (default `1`) are bounded safeguards.
+The local JSON/demo store retains its single-process background wake-up solely
+for compatibility; never run this worker against it.
 
 ### Intentional limits
 

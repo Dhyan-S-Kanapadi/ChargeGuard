@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from threading import RLock
 from typing import Any
+from uuid import uuid4
 from core.runtime import RuntimeConfigurationError, contains_synthetic_data, runtime_environment
 
 from core.state import (
@@ -72,6 +73,21 @@ def _provider_event_is_stale(
     )
 
 
+def _provider_event_max_attempts() -> int:
+    try:
+        return min(10, max(1, int(os.getenv("PROVIDER_EVENT_MAX_ATTEMPTS", "5"))))
+    except ValueError:
+        return 5
+
+
+def _provider_event_retry_delay_seconds(attempt_count: int) -> int:
+    try:
+        base = min(60, max(1, int(os.getenv("PROVIDER_EVENT_RETRY_BASE_SECONDS", "5"))))
+    except ValueError:
+        base = 5
+    return min(300, base * (2 ** max(0, attempt_count - 1)))
+
+
 class InMemoryStore:
     """Thread-safe repository with optional JSON persistence for local durability."""
 
@@ -96,6 +112,7 @@ class InMemoryStore:
         self._orders: dict[str, OrderRecord] = {}
         self._disputes: dict[str, dict[str, Any]] = {}
         self._provider_events: dict[str, dict[str, Any]] = {}
+        self._provider_event_jobs: dict[str, dict[str, Any]] = {}
         self._simulator_disputes: dict[str, dict[str, Any]] = {}
         self._load()
 
@@ -119,6 +136,7 @@ class InMemoryStore:
             self._orders.clear()
             self._disputes.clear()
             self._provider_events.clear()
+            self._provider_event_jobs.clear()
             self._simulator_disputes.clear()
             self._save()
 
@@ -1363,61 +1381,66 @@ class InMemoryStore:
         if not event_id:
             raise ValueError("Provider event requires an event ID.")
         with self._lock:
-            now = datetime.now(timezone.utc)
-            existing = self._provider_events.get(event_id)
-            if existing is not None:
-                processing_state = existing.get("processing_state") or existing.get(
-                    "processing_status"
-                )
-                stale_processing = _provider_event_is_stale(existing, now)
-                if processing_state != "failed" and not stale_processing:
-                    return False
-                attempt_count = int(existing.get("attempt_count") or 0)
-                received_at = existing.get("received_at") or now
-                existing.update(deepcopy(event))
-                existing["event_id"] = event_id
-                existing["provider_event_id"] = event_id
-                existing["processing_state"] = "received"
-                existing["processing_status"] = "received"
-                existing["failure_reason"] = None
-                existing["error"] = None
-                existing["processed_at"] = None
-                existing["last_attempt_at"] = existing.get("last_attempt_at")
-                existing["attempt_count"] = attempt_count
-                existing["received_at"] = received_at
-                self._save()
-                return True
-            record = deepcopy(event)
-            record["event_id"] = event_id
-            record["provider_event_id"] = event_id
-            event_type = record.get("event_type") or record.get("event_name")
-            record["event_type"] = event_type
-            record["event_name"] = event_type
-            dispute_id = record.get("provider_dispute_id") or record.get("chargeback_id")
-            record["provider_dispute_id"] = dispute_id
-            record["chargeback_id"] = dispute_id
-            record.setdefault("received_at", now)
-            failure_reason = record.get("failure_reason") or record.get("error")
-            record["failure_reason"] = failure_reason
-            record["error"] = failure_reason
-            processing_state = record.get("processing_state") or record.get(
-                "processing_status", "received"
-            )
-            if processing_state not in PROVIDER_EVENT_STATES:
-                raise ValueError(f"Invalid provider event state: {processing_state}")
-            record["processing_state"] = processing_state
-            record["processing_status"] = processing_state
-            record.setdefault("attempt_count", 1 if processing_state == "processing" else 0)
-            record.setdefault(
-                "last_attempt_at",
-                now if processing_state == "processing" else None,
-            )
-            record["processed_at"] = None
-            if processing_state in TERMINAL_PROVIDER_EVENT_STATES:
-                record["processed_at"] = record.get("processed_at") or now
-            self._provider_events[event_id] = record
+            if not self._claim_provider_event(event, event_id):
+                return False
             self._save()
             return True
+
+    def _claim_provider_event(self, event: dict[str, Any], event_id: str) -> bool:
+        """Claim an event while the caller owns ``_lock``; does not persist."""
+        now = datetime.now(timezone.utc)
+        existing = self._provider_events.get(event_id)
+        if existing is not None:
+            processing_state = existing.get("processing_state") or existing.get(
+                "processing_status"
+            )
+            stale_processing = _provider_event_is_stale(existing, now)
+            if processing_state != "failed" and not stale_processing:
+                return False
+            attempt_count = int(existing.get("attempt_count") or 0)
+            received_at = existing.get("received_at") or now
+            existing.update(deepcopy(event))
+            existing["event_id"] = event_id
+            existing["provider_event_id"] = event_id
+            existing["processing_state"] = "received"
+            existing["processing_status"] = "received"
+            existing["failure_reason"] = None
+            existing["error"] = None
+            existing["processed_at"] = None
+            existing["last_attempt_at"] = existing.get("last_attempt_at")
+            existing["attempt_count"] = attempt_count
+            existing["received_at"] = received_at
+            return True
+        record = deepcopy(event)
+        record["event_id"] = event_id
+        record["provider_event_id"] = event_id
+        event_type = record.get("event_type") or record.get("event_name")
+        record["event_type"] = event_type
+        record["event_name"] = event_type
+        dispute_id = record.get("provider_dispute_id") or record.get("chargeback_id")
+        record["provider_dispute_id"] = dispute_id
+        record["chargeback_id"] = dispute_id
+        record.setdefault("received_at", now)
+        failure_reason = record.get("failure_reason") or record.get("error")
+        record["failure_reason"] = failure_reason
+        record["error"] = failure_reason
+        processing_state = record.get("processing_state") or record.get(
+            "processing_status", "received"
+        )
+        if processing_state not in PROVIDER_EVENT_STATES:
+            raise ValueError(f"Invalid provider event state: {processing_state}")
+        record["processing_state"] = processing_state
+        record["processing_status"] = processing_state
+        record.setdefault("attempt_count", 1 if processing_state == "processing" else 0)
+        record.setdefault(
+            "last_attempt_at",
+            now if processing_state == "processing" else None,
+        )
+        record["processed_at"] = None
+        if processing_state in TERMINAL_PROVIDER_EVENT_STATES:
+            record["processed_at"] = record.get("processed_at") or now
+        self._provider_events[event_id] = record
+        return True
 
     def queue_provider_event(self, event_id: str) -> bool:
         """Move a newly received event to the recoverable queue."""
@@ -1428,6 +1451,191 @@ class InMemoryStore:
             self._set_provider_event_state(event, "queued")
             self._save()
             return True
+
+    def claim_and_enqueue_provider_event(self, event: dict[str, Any]) -> bool:
+        """Atomically record a provider event and its one durable outbox job."""
+        event_id = str(event.get("event_id") or event.get("provider_event_id") or "")
+        if not event_id:
+            raise ValueError("Provider event requires an event ID.")
+        with self._lock:
+            # A provider redelivery cannot bypass bounded retries. Operators use
+            # enqueue_provider_event_job for an explicit retry after correction.
+            if self._provider_events.get(event_id, {}).get("processing_state") == "failed":
+                return False
+            if not self._claim_provider_event(event, event_id):
+                return False
+            record = self._provider_events[event_id]
+            now = datetime.now(timezone.utc)
+            self._set_provider_event_state(record, "queued")
+            self._provider_event_jobs[event_id] = {
+                "event_id": event_id,
+                "provider": record["provider"],
+                "job_state": "queued",
+                "attempt_count": 0,
+                "available_at": now,
+                "lease_token": None,
+                "lease_expires_at": None,
+                "last_error": None,
+                "created_at": now,
+                "updated_at": now,
+            }
+            self._save()
+            return True
+
+    def enqueue_provider_event_job(
+        self,
+        event_id: str,
+        *,
+        include_received: bool = True,
+    ) -> bool:
+        """Queue a recoverable event without ever creating a second job."""
+        with self._lock:
+            event = self._provider_events.get(event_id)
+            if event is None:
+                return False
+            state = event.get("processing_state") or event.get("processing_status")
+            eligible = {"queued", "failed", "unresolved"}
+            if include_received:
+                eligible.add("received")
+            job = self._provider_event_jobs.get(event_id)
+            now = datetime.now(timezone.utc)
+            if state == "processing":
+                eligible_processing = _provider_event_is_stale(event, now)
+                if job is not None:
+                    lease = job.get("lease_expires_at")
+                    eligible_processing = isinstance(lease, datetime) and lease <= now
+                if not eligible_processing:
+                    return False
+            elif state not in eligible:
+                return False
+            if job is not None and job.get("job_state") == "processing":
+                lease = job.get("lease_expires_at")
+                if isinstance(lease, datetime) and lease > now:
+                    return False
+            self._set_provider_event_state(event, "queued")
+            if job is None:
+                job = {
+                    "event_id": event_id,
+                    "provider": event["provider"],
+                    "attempt_count": int(event.get("attempt_count") or 0),
+                    "created_at": now,
+                }
+                self._provider_event_jobs[event_id] = job
+            else:
+                job["attempt_count"] = max(
+                    int(job.get("attempt_count") or 0),
+                    int(event.get("attempt_count") or 0),
+                )
+            job.update(
+                job_state="queued",
+                available_at=now,
+                lease_token=None,
+                lease_expires_at=None,
+                last_error=None,
+                updated_at=now,
+            )
+            self._save()
+            return True
+
+    def claim_next_provider_event_job(self, *, provider: str) -> dict[str, Any] | None:
+        """Lease one due job. The returned token fences later job-state writes."""
+        with self._lock:
+            now = datetime.now(timezone.utc)
+            for job in self._provider_event_jobs.values():
+                if job.get("provider") != provider or job.get("job_state") != "processing":
+                    continue
+                lease = job.get("lease_expires_at")
+                if isinstance(lease, datetime) and lease <= now:
+                    event = self._provider_events.get(job["event_id"])
+                    if event is not None:
+                        self._set_provider_event_state(event, "queued")
+                    job.update(job_state="queued", available_at=now, lease_token=None,
+                               lease_expires_at=None, updated_at=now)
+            candidates = [
+                job for job in self._provider_event_jobs.values()
+                if job.get("provider") == provider
+                and job.get("job_state") == "queued"
+                and isinstance(job.get("available_at"), datetime)
+                and job["available_at"] <= now
+            ]
+            if not candidates:
+                self._save()
+                return None
+            job = min(candidates, key=lambda item: (item["available_at"], item["created_at"], item["event_id"]))
+            event = self._provider_events[job["event_id"]]
+            lease_token = uuid4().hex
+            job.update(
+                job_state="processing",
+                attempt_count=int(job.get("attempt_count") or 0) + 1,
+                lease_token=lease_token,
+                lease_expires_at=now + timedelta(seconds=_provider_event_claim_timeout_seconds()),
+                updated_at=now,
+            )
+            self._set_provider_event_state(event, "processing")
+            event["attempt_count"] = job["attempt_count"]
+            event["last_attempt_at"] = now
+            self._save()
+            return deepcopy(job)
+
+    def complete_provider_event_job(self, event_id: str, *, lease_token: str) -> bool:
+        with self._lock:
+            job = self._provider_event_jobs.get(event_id)
+            if job is None or job.get("job_state") != "processing" or job.get("lease_token") != lease_token:
+                return False
+            job.update(job_state="completed", lease_token=None, lease_expires_at=None,
+                       updated_at=datetime.now(timezone.utc))
+            self._save()
+            return True
+
+    def retry_provider_event_job(
+        self,
+        event_id: str,
+        *,
+        lease_token: str,
+        failure_reason: str,
+    ) -> str | None:
+        with self._lock:
+            job = self._provider_event_jobs.get(event_id)
+            event = self._provider_events.get(event_id)
+            if (job is None or event is None or job.get("job_state") != "processing"
+                    or job.get("lease_token") != lease_token):
+                return None
+            now = datetime.now(timezone.utc)
+            attempts = int(job.get("attempt_count") or 0)
+            job.update(lease_token=None, lease_expires_at=None, last_error=failure_reason, updated_at=now)
+            if attempts >= _provider_event_max_attempts():
+                job["job_state"] = "dead_letter"
+                self._set_provider_event_state(event, "failed")
+                event["failure_reason"] = failure_reason
+                event["error"] = failure_reason
+                self._save()
+                return "dead_letter"
+            job.update(job_state="queued", available_at=now + timedelta(
+                seconds=_provider_event_retry_delay_seconds(attempts)
+            ))
+            self._set_provider_event_state(event, "queued")
+            self._save()
+            return "queued"
+
+    def update_provider_event_for_job(
+        self,
+        event_id: str,
+        *,
+        lease_token: str,
+        **updates: Any,
+    ) -> bool:
+        with self._lock:
+            job = self._provider_event_jobs.get(event_id)
+            if job is None or job.get("job_state") != "processing" or job.get("lease_token") != lease_token:
+                return False
+            self.update_provider_event(event_id, **updates)
+            return True
+
+    def list_provider_event_jobs(self, *, provider: str | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            jobs = [deepcopy(job) for job in self._provider_event_jobs.values()
+                    if provider is None or job.get("provider") == provider]
+        return sorted(jobs, key=lambda item: (item["created_at"], item["event_id"]))
 
     def start_provider_event_processing(self, event_id: str) -> bool:
         """Atomically acquire a queued event for one processing attempt."""
@@ -1640,8 +1848,10 @@ class InMemoryStore:
         self._device_risk_connector_audit = deepcopy(device_risk_connector_audit)
         self._disputes = deepcopy(disputes)
         provider_events = payload.get("provider_events", {})
+        provider_event_jobs = payload.get("provider_event_jobs", {})
         simulator_disputes = payload.get("simulator_disputes", {})
-        if not isinstance(provider_events, dict) or not isinstance(simulator_disputes, dict):
+        if (not isinstance(provider_events, dict) or not isinstance(provider_event_jobs, dict)
+                or not isinstance(simulator_disputes, dict)):
             raise ValueError("Store provider event maps must be objects.")
         self._provider_events = deepcopy(provider_events)
         for event_id, event in self._provider_events.items():
@@ -1660,6 +1870,7 @@ class InMemoryStore:
                 event["processed_at"] = event.get("received_at") or datetime.now(
                     timezone.utc
                 )
+        self._provider_event_jobs = deepcopy(provider_event_jobs)
         self._simulator_disputes = deepcopy(simulator_disputes)
 
     def _save(self) -> None:
@@ -1687,6 +1898,7 @@ class InMemoryStore:
             "orders": self._orders,
             "disputes": self._disputes,
             "provider_events": self._provider_events,
+            "provider_event_jobs": self._provider_event_jobs,
             "simulator_disputes": self._simulator_disputes,
         }
         temp_path = self._path.with_suffix(f"{self._path.suffix}.tmp")
